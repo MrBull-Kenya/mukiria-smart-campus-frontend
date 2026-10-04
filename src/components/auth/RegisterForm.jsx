@@ -4,7 +4,6 @@ import api, { getErrorMessage } from '../../services/api';
 import { useFetch } from '../../hooks/useFetch';
 import { Input, Notice } from '../ui';
 
-// Shared by the student and class-rep registration pages
 export default function RegisterForm({ title, endpoint, isRep }) {
   const navigate = useNavigate();
   const classes = useFetch('/classes/list');
@@ -28,7 +27,9 @@ export default function RegisterForm({ title, endpoint, isRep }) {
 
   return (
     <div className="bg-white p-8 rounded-2xl shadow-xl border border-gray-100 w-full space-y-4">
-      <div className="text-center"><h2 className="text-2xl font-extrabold text-gray-900">{title}</h2></div>
+      <div className="text-center">
+        <h2 className="text-2xl font-extrabold text-gray-900">{title}</h2>
+      </div>
       {error && <Notice kind="error">{error}</Notice>}
       <form onSubmit={submit} className="space-y-3">
         <Input label="Admission number" required value={f.adm_no} onChange={set('adm_no')} />
@@ -60,9 +61,13 @@ export default function RegisterForm({ title, endpoint, isRep }) {
         {!isRep && <Input label="Parent / guardian phone" value={f.parent_phone} onChange={set('parent_phone')} />}
         <Input label="Password (8+ characters)" type="password" required value={f.password} onChange={set('password')} />
         <Input label="Confirm password" type="password" required value={f.confirm} onChange={set('confirm')} />
-        <button disabled={busy} className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold text-sm hover:bg-blue-700 disabled:opacity-50 transition">{busy ? 'Creating account…' : 'Register'}</button>
+        <button disabled={busy} className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold text-sm hover:bg-blue-700 disabled:opacity-50 transition">
+          {busy ? 'Creating account…' : 'Register'}
+        </button>
       </form>
-      <p className="text-center text-xs text-gray-500"><Link to="/login" className="text-blue-600 font-bold hover:underline">Back to sign in</Link></p>
+      <p className="text-center text-xs text-gray-500">
+        <Link to="/login" className="text-blue-600 font-bold hover:underline">Back to sign in</Link>
+      </p>
     </div>
   );
 }
