@@ -7,7 +7,7 @@ const num = (value, fallback) => {
 
 export const INSTITUTION = 'Mukiria Technical Training Institute (MTTI)';
 
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL || '/api';
 
 export const SOCKET_URL = (() => {
   if (import.meta.env.VITE_SOCKET_URL) return import.meta.env.VITE_SOCKET_URL;
