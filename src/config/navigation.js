@@ -36,6 +36,7 @@ export const NAV_BY_ROLE = {
     { to: '/rep/temp-ids', label: 'Temp IDs' },
     { to: '/rep/parent-alerts', label: 'Parent Alerts' },
     { to: '/rep/chat', label: 'Announce' },
+    { to: '/rep/weekly-sheet', label: 'Weekly Sheet' },
     { to: '/rep/ministry-export', label: 'Export' },
     ...studentLinks.slice(1, 3),
     ...campusLinks,
@@ -51,6 +52,8 @@ export const NAV_BY_ROLE = {
     { to: '/hod/classes', label: 'Classes' },
     { to: '/hod/approve-rep', label: 'Approve Reps' },
     { to: '/hod/timetables', label: 'Timetables' },
+    { to: '/hod/weekly-sheets', label: 'Weekly Sheets' },
+    { to: '/hod/devices', label: 'Device Locks' },
     { to: '/hod/at-risk', label: 'At-Risk' },
     { to: '/hod/exam-block-list', label: 'Exam Block' },
     { to: '/hod/lost-id-logs', label: 'Lost IDs' },
@@ -63,5 +66,6 @@ NAV_BY_ROLE[ADMIN] = [
   { to: '/admin/dashboard', label: 'Admin Home' },
   { to: '/admin/classes', label: 'Classes' },
   { to: '/admin/staff', label: 'Staff' },
+  { to: '/admin/settings', label: 'Settings' },
   ...NAV_BY_ROLE[HOD].slice(1),
 ];

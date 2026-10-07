@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { getErrorMessage } from '../../services/api';
 import { ROLE_HOME } from '../../config/campus';
 
 export default function Login() {
@@ -22,7 +21,7 @@ export default function Login() {
       const from = location.state?.from?.pathname;
       navigate(from && from !== '/' && from !== '/login' ? from : ROLE_HOME[user.role] || '/', { replace: true });
     } catch (err) {
-      setError(getErrorMessage(err, 'Invalid credentials. Please verify your email and password.'));
+      setError(err.message || 'Invalid credentials. Please verify your email and password.');
     } finally {
       setLoading(false);
     }

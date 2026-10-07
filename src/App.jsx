@@ -41,6 +41,7 @@ const MinistryExport = page(() => import('./pages/classrep/MinistryExport'));
 const ClassChatAdmin = page(() => import('./pages/classrep/ClassChatAdmin'));
 const LeaderboardManager = page(() => import('./pages/classrep/LeaderboardManager'));
 const OfflineSync = page(() => import('./pages/classrep/OfflineSync'));
+const RepWeeklySheet = page(() => import('./pages/classrep/WeeklySheet'));
 const ParentAlerts = page(() => import('./pages/classrep/ParentAlerts'));
 // Teacher
 const TeacherDashboard = page(() => import('./pages/teacher/Dashboard'));
@@ -56,10 +57,13 @@ const FinalReports = page(() => import('./pages/hod/FinalReports'));
 const LostIDLogs = page(() => import('./pages/hod/LostIDLogs'));
 const MinistryReports = page(() => import('./pages/hod/MinistryReports'));
 const TimetableApprovals = page(() => import('./pages/hod/TimetableApprovals'));
+const HodWeeklySheets = page(() => import('./pages/hod/WeeklySheets'));
+const HodDevices = page(() => import('./pages/hod/Devices'));
 // Administrator
 const AdminDashboard = page(() => import('./pages/admin/Dashboard'));
 const AdminClasses = page(() => import('./pages/admin/Classes'));
 const AdminStaff = page(() => import('./pages/admin/Staff'));
+const AdminSettings = page(() => import('./pages/admin/Settings'));
 // Campus (all roles)
 const LibraryCheckin = page(() => import('./pages/campus/LibraryCheckin'));
 const GamesAttendance = page(() => import('./pages/campus/GamesAttendance'));
@@ -144,6 +148,7 @@ export default function App() {
                   <Route path="/rep/timetable" element={<TimetableManager />} />
                   <Route path="/rep/temp-ids" element={<ApproveTempID />} />
                   <Route path="/rep/ministry-export" element={<MinistryExport />} />
+                  <Route path="/rep/weekly-sheet" element={<RepWeeklySheet />} />
                   <Route path="/rep/chat" element={<ClassChatAdmin />} />
                   <Route path="/rep/leaderboard" element={<LeaderboardManager />} />
                   <Route path="/rep/offline-sync" element={<OfflineSync />} />
@@ -160,6 +165,7 @@ export default function App() {
                   <Route path="/admin/dashboard" element={<AdminDashboard />} />
                   <Route path="/admin/classes" element={<AdminClasses />} />
                   <Route path="/admin/staff" element={<AdminStaff />} />
+                  <Route path="/admin/settings" element={<AdminSettings />} />
                 </Route>
 
                 <Route element={<ProtectedRoute roles={ACCESS.hod} />}>
@@ -172,6 +178,8 @@ export default function App() {
                   <Route path="/hod/lost-id-logs" element={<LostIDLogs />} />
                   <Route path="/hod/ministry-reports" element={<MinistryReports />} />
                   <Route path="/hod/timetables" element={<TimetableApprovals />} />
+                  <Route path="/hod/weekly-sheets" element={<HodWeeklySheets />} />
+                  <Route path="/hod/devices" element={<HodDevices />} />
                 </Route>
               </Route>
             </Route>

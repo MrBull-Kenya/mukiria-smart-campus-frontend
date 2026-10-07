@@ -11,6 +11,7 @@ export default function AdminDashboard() {
         {(d) => (
           <>
             {d.pendingStaff > 0 && <Notice kind="warn"><strong>{d.pendingStaff}</strong> staff registration(s) are waiting for your approval. <Link to="/admin/staff" className="underline font-bold">Review</Link></Notice>}
+            {!d.termStart && <Notice kind="info">The term start date isn't set, so printed attendance registers will have a blank WEEK number. <Link to="/admin/settings" className="underline font-bold">Set it</Link></Notice>}
             {d.classes === 0 && <Notice kind="info">No classes exist yet, so nobody can register as a student. <Link to="/admin/classes" className="underline font-bold">Add the first class</Link></Notice>}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               <Stat label="Classes" value={d.classes} tone="blue" />
@@ -25,6 +26,7 @@ export default function AdminDashboard() {
             <LinkGrid Link={Link} items={[
               { to: '/admin/classes', icon: '🏫', label: 'Classes', hint: 'Add or remove classes' },
               { to: '/admin/staff', icon: '👥', label: 'Staff accounts', hint: 'Approve, add, deactivate' },
+              { to: '/admin/settings', icon: '⚙️', label: 'Settings', hint: 'Term start date' },
               { to: '/hod/dashboard', icon: '📊', label: 'Department overview', hint: 'Reports and attendance' },
             ]} />
           </>

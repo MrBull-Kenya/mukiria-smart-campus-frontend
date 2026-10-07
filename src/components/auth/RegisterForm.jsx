@@ -1,35 +1,68 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import api, { getErrorMessage } from '../../services/api';
-import { useFetch } from '../../hooks/useFetch';
+import { supabase, friendlyError } from '../../utils/supabase';
 import { Input, Notice } from '../ui';
 
+// Shared by the student and class-rep registration pages
 export default function RegisterForm({ title, endpoint, isRep }) {
   const navigate = useNavigate();
-  const classes = useFetch('/classes/list');
+  const [classes, setClasses] = useState({ data: [], loading: true, error: null });
   const [f, setF] = useState({ adm_no: '', name: '', email: '', parent_email: '', parent_phone: '', class_code: '', password: '', confirm: '' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }));
+
+  // Fetch classes directly from Supabase on mount
+  useEffect(() => {
+    async function fetchClasses() {
+      try {
+        const { data, error } = await supabase.from('classes').select('class_code, course, module').order('class_code');
+        if (error) throw error;
+        setClasses({ data: data || [], loading: false, error: null });
+      } catch (err) {
+        setClasses({ data: [], loading: false, error: friendlyError(err, 'Failed to load classes') });
+      }
+    }
+    fetchClasses();
+  }, []);
 
   const submit = async (e) => {
     e.preventDefault();
     if (f.password.length < 8) return setError('Use at least 8 characters for your password.');
     if (f.password !== f.confirm) return setError('Passwords do not match.');
     setBusy(true); setError('');
+    
     try {
       const { confirm, ...body } = f;
-      const res = await api.post(endpoint, body);
-      navigate(`/auth/verify-email?email=${encodeURIComponent(f.email)}&status=${res.data.status}&role=${isRep ? 'student_rep' : 'student'}`);
-    } catch (err) { setError(getErrorMessage(err, 'Registration failed.')); }
+      const email = body.email.trim();
+      const { data, error: signErr } = await supabase.auth.signUp({
+        email,
+        password: body.password,
+        options: {
+          data: {
+            role: isRep ? 'student_rep' : 'student',
+            name: body.name.trim(),
+            adm_no: body.adm_no.trim(),
+            class_code: body.class_code,
+            parent_email: isRep ? '' : body.parent_email.trim(),
+            parent_phone: isRep ? '' : body.parent_phone.trim(),
+          },
+        },
+      });
+      if (signErr) throw signErr;
+      if (data.session) await supabase.auth.signOut(); // make them sign in properly
+
+      if (isRep) navigate(`/auth/verify-email?email=${encodeURIComponent(email)}&status=pending&role=student_rep`);
+      else navigate(`/auth/verify-email?email=${encodeURIComponent(email)}&status=approved&role=student`);
+    } catch (err) {
+      setError(friendlyError(err, 'Registration failed.'));
+    }
     setBusy(false);
   };
 
   return (
     <div className="bg-white p-8 rounded-2xl shadow-xl border border-gray-100 w-full space-y-4">
-      <div className="text-center">
-        <h2 className="text-2xl font-extrabold text-gray-900">{title}</h2>
-      </div>
+      <div className="text-center"><h2 className="text-2xl font-extrabold text-gray-900">{title}</h2></div>
       {error && <Notice kind="error">{error}</Notice>}
       <form onSubmit={submit} className="space-y-3">
         <Input label="Admission number" required value={f.adm_no} onChange={set('adm_no')} />
@@ -39,21 +72,7 @@ export default function RegisterForm({ title, endpoint, isRep }) {
           <span className="block text-xs font-bold text-gray-700 mb-1">Class</span>
           <select required value={f.class_code} onChange={set('class_code')} className="w-full bg-gray-50 border border-gray-300 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-blue-500">
             <option value="">{classes.loading ? 'Loading classes…' : 'Select your class'}</option>
-            {(() => {
-              const raw = classes.data;
-              const list = Array.isArray(raw) 
-                ? raw 
-                : Array.isArray(raw?.data) 
-                  ? raw.data 
-                  : Array.isArray(raw?.classes) 
-                    ? raw.classes 
-                    : [];
-              return list.map((c) => (
-                <option key={c.class_code} value={c.class_code}>
-                  {c.class_code}{c.course ? ` · ${c.course}` : ''}
-                </option>
-              ));
-            })()}
+            {(classes.data || []).map((c) => <option key={c.class_code} value={c.class_code}>{c.class_code}{c.course ? ` · ${c.course}` : ''}</option>)}
           </select>
           {classes.error && <span className="text-[11px] text-rose-600">{classes.error}</span>}
         </label>
@@ -61,13 +80,9 @@ export default function RegisterForm({ title, endpoint, isRep }) {
         {!isRep && <Input label="Parent / guardian phone" value={f.parent_phone} onChange={set('parent_phone')} />}
         <Input label="Password (8+ characters)" type="password" required value={f.password} onChange={set('password')} />
         <Input label="Confirm password" type="password" required value={f.confirm} onChange={set('confirm')} />
-        <button disabled={busy} className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold text-sm hover:bg-blue-700 disabled:opacity-50 transition">
-          {busy ? 'Creating account…' : 'Register'}
-        </button>
+        <button disabled={busy} className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold text-sm hover:bg-blue-700 disabled:opacity-50 transition">{busy ? 'Creating account…' : 'Register'}</button>
       </form>
-      <p className="text-center text-xs text-gray-500">
-        <Link to="/login" className="text-blue-600 font-bold hover:underline">Back to sign in</Link>
-      </p>
+      <p className="text-center text-xs text-gray-500"><Link to="/login" className="text-blue-600 font-bold hover:underline">Back to sign in</Link></p>
     </div>
   );
 }

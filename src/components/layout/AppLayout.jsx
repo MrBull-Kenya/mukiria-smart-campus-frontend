@@ -2,6 +2,8 @@ import React from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { useOfflineSync } from '../../hooks/useOfflineSync';
+import InstallButton from '../InstallButton';
+import NotificationBell from '../NotificationBell';
 import { NAV_BY_ROLE } from '../../config/navigation';
 import { roleLabel } from '../../config/campus';
 
@@ -42,9 +44,13 @@ export default function AppLayout() {
               </p>
             </div>
           </div>
-          <button onClick={handleLogout} className="text-xs font-bold text-rose-600 border border-rose-200 rounded-lg px-3 py-1.5 hover:bg-rose-50 transition shrink-0">
-            Log out
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            <InstallButton />
+            <NotificationBell />
+            <button onClick={handleLogout} className="h-9 text-xs font-bold text-rose-600 border border-rose-200 rounded-lg px-3 hover:bg-rose-50 transition">
+              Log out
+            </button>
+          </div>
         </div>
         <nav className="max-w-6xl mx-auto px-4 pb-2 flex gap-1 overflow-x-auto">
           {links.map((l) => (

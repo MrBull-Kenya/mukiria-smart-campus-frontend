@@ -2,10 +2,11 @@ import React, { useState } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import api, { getErrorMessage } from '../../services/api';
 
-// The reset email contains a token only (no link), so the student enters email + token + new password.
-// POST /auth/reset-password/:token  { email, token, newPassword }  (authController.resetPassword)
+// Arrives from the emailed link (/auth/reset-password?email=...&token=...): then only the new password is asked for.
+// Without those parameters (typed code) the email and code boxes are shown too.
 export default function ResetPassword() {
   const [params] = useSearchParams();
+  const fromLink = !!(params.get('email') && params.get('token'));
   const [email, setEmail] = useState(params.get('email') || '');
   const [token, setToken] = useState(params.get('token') || '');
   const [password, setPassword] = useState('');
@@ -27,7 +28,7 @@ export default function ResetPassword() {
       setSuccess(true);
       setTimeout(() => navigate('/login'), 1800);
     } catch (err) {
-      setError(getErrorMessage(err, 'Invalid or expired reset token.'));
+      setError(getErrorMessage(err, 'This reset link is invalid or has expired.'));
     } finally {
       setLoading(false);
     }
@@ -38,21 +39,28 @@ export default function ResetPassword() {
   return (
     <div className="bg-white p-8 rounded-2xl shadow-xl border border-gray-100 w-full space-y-6">
       <div className="text-center space-y-1">
-        <h2 className="text-2xl font-extrabold text-gray-900">Set New Password</h2>
-        <p className="text-xs text-gray-500">Enter the token from your email and choose a new password</p>
+        <h2 className="text-2xl font-extrabold text-gray-900">Choose a new password</h2>
+        <p className="text-xs text-gray-500">
+          {fromLink ? <>for <strong>{email}</strong></> : 'Enter your email, the code from the email we sent, and a new password'}
+        </p>
       </div>
 
-      {error && <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl font-medium text-center">{error}</div>}
+      {error && (
+        <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs rounded-xl font-medium text-center space-y-1">
+          <p>{error}</p>
+          <Link to="/auth/forgot-password" className="underline font-bold">Request a new link</Link>
+        </div>
+      )}
       {success ? (
         <div className="p-4 bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs rounded-xl font-medium text-center">
           Password updated. Redirecting to sign in…
         </div>
       ) : (
         <form onSubmit={handleUpdate} className="space-y-3">
-          <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" className={input} />
-          <input type="text" required value={token} onChange={(e) => setToken(e.target.value)} placeholder="Reset token from email" className={`${input} font-mono`} />
-          <input type="password" required minLength={8} value={password} onChange={(e) => setPassword(e.target.value)} placeholder="New password" className={input} />
-          <input type="password" required value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder="Confirm new password" className={input} />
+          {!fromLink && <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" className={input} />}
+          {!fromLink && <input type="text" required value={token} onChange={(e) => setToken(e.target.value)} placeholder="Code from the email" className={`${input} font-mono`} />}
+          <input type="password" required minLength={8} autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="New password (8+ characters)" className={input} />
+          <input type="password" required autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder="Confirm new password" className={input} />
           <button type="submit" disabled={loading}
             className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold text-sm hover:bg-blue-700 disabled:opacity-50 transition">
             {loading ? 'Updating…' : 'Update password'}

@@ -22,6 +22,8 @@ export default function HodDashboard() {
               { to: '/hod/classes', icon: '🏫', label: 'All classes' },
               { to: '/hod/approve-rep', icon: '✅', label: 'Approve class reps' },
               { to: '/hod/timetables', icon: '🗓️', label: 'Approve timetables' },
+              { to: '/hod/weekly-sheets', icon: '🖨️', label: 'Weekly sheets', hint: 'Any class' },
+              { to: '/hod/devices', icon: '📱', label: 'Device locks', hint: 'Fix "Device mismatch"' },
               { to: '/hod/at-risk', icon: '⚠️', label: 'At-risk students' },
               { to: '/hod/exam-block-list', icon: '🚫', label: 'Exam block list' },
               { to: '/hod/lost-id-logs', icon: '🪪', label: 'Lost ID logs' },

@@ -5,11 +5,14 @@ import { Page, Async, Stat, LinkGrid, Notice } from '../../components/ui';
 
 export default function RepDashboard() {
   const state = useFetch('/classrep/dashboard', { pollMs: 15000 });
+  const day = new Date().getDay();
+  const endOfWeek = day === 5 || day === 6 || day === 0; // Friday to Sunday: time to print the week's sheet
   return (
     <Page title="Class rep dashboard" subtitle={state.data?.className}>
       <Async state={state}>
         {(d) => (
           <>
+            {endOfWeek && <Notice kind="warn">📄 The week is ending. <Link to="/rep/weekly-sheet" className="underline font-bold">Download this week's attendance sheet</Link> and print it for signing.</Notice>}
             {d.activeSession
               ? <Notice kind="ok">Session in progress: <strong>{d.activeSession.unit}</strong>. <Link to="/rep/generate-qr" className="underline font-bold">Show QR</Link></Notice>
               : <Notice kind="info">No active session. <Link to="/rep/generate-qr" className="underline font-bold">Start one</Link> when the lecturer arrives.</Notice>}
@@ -29,6 +32,7 @@ export default function RepDashboard() {
               { to: '/rep/parent-alerts', icon: '📨', label: 'Parent alerts' },
               { to: '/rep/leaderboard', icon: '🏆', label: 'Leaderboard' },
               { to: '/rep/chat', icon: '📢', label: 'Announcements' },
+              { to: '/rep/weekly-sheet', icon: '🖨️', label: 'Weekly sheet', hint: 'Print on Friday' },
               { to: '/rep/ministry-export', icon: '📄', label: 'Export report' },
             ]} />
           </>
