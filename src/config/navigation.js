@@ -16,6 +16,7 @@ const studentLinks = [
   { to: '/student/dashboard', label: 'Home' },
   { to: '/scan', label: 'Scan' },
   { to: '/student/rank', label: 'My Rank' },
+  { to: '/student/timetable', label: 'Timetable' },
   { to: '/student/digital-id', label: 'Digital ID' },
   { to: '/student/chat', label: 'Class Chat' },
 ];
@@ -30,12 +31,14 @@ export const NAV_BY_ROLE = {
   [REP]: [
     { to: '/rep/dashboard', label: 'Rep Home' },
     { to: '/rep/generate-qr', label: 'Show QR' },
+    { to: '/rep/mark-present', label: 'Mark Present' },
     { to: '/rep/live-attendance', label: 'Live' },
     { to: '/rep/members', label: 'Members' },
     { to: '/rep/timetable', label: 'Timetable' },
     { to: '/rep/temp-ids', label: 'Temp IDs' },
     { to: '/rep/parent-alerts', label: 'Parent Alerts' },
-    { to: '/rep/chat', label: 'Announce' },
+    { to: '/rep/chat', label: 'Announcements' },
+    { to: '/student/chat', label: 'Class Chat' },
     { to: '/rep/weekly-sheet', label: 'Weekly Sheet' },
     { to: '/rep/ministry-export', label: 'Export' },
     ...studentLinks.slice(1, 3),

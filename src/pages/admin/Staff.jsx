@@ -51,7 +51,7 @@ export default function AdminStaff() {
                   <Input label="Full name" required value={f.name} onChange={set('name')} placeholder={f.role === 'teacher' ? "Exactly as class reps will pick it, e.g. Mr. Otieno" : ''} />
                   <Input label="Email" type="email" required value={f.email} onChange={set('email')} />
                   <div className="flex gap-2 items-end">
-                    <div className="flex-1"><Input label="Password (8+ characters)" required value={f.password} onChange={set('password')} /></div>
+                    <div className="flex-1"><Input label="Password (8+ characters)" type="password" required autoComplete="new-password" value={f.password} onChange={set('password')} /></div>
                     <Btn type="button" variant="ghost" onClick={() => setF((x) => ({ ...x, password: generatePassword() }))}>Generate</Btn>
                   </div>
                   <Btn type="submit">+ Add staff member</Btn>

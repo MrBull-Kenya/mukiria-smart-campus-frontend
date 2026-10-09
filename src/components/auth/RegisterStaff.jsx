@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { supabase, friendlyError } from '../../utils/supabase';
+import api, { getErrorMessage } from '../../services/api';
 import { Input, Notice } from '../ui';
 
 // Shared by the Teacher, HOD and Administrator registration pages.
@@ -19,23 +19,14 @@ export default function RegisterStaff({ role, title, intro }) {
     setBusy(true); setError('');
     try {
       const email = f.email.trim();
-      const { data, error: signErr } = await supabase.auth.signUp({
+      const { data } = await api.post(`/auth/register-${role}`, {
         email,
         password: f.password,
-        options: { data: { role, name: f.name.trim() } },
+        name: f.name.trim(),
       });
-      if (signErr) throw signErr;
-
-      // If Supabase signed us in (email confirmation off), read the real status, then sign out again.
-      let status = role === 'admin' ? 'unknown' : 'pending';
-      if (data.session) {
-        const { data: p } = await supabase.from('profiles').select('status').eq('id', data.user.id).maybeSingle();
-        if (p?.status) status = p.status;
-        await supabase.auth.signOut();
-      }
-      navigate(`/auth/verify-email?email=${encodeURIComponent(email)}&status=${status}&role=${role}`);
+      navigate(`/auth/verify-email?email=${encodeURIComponent(email)}&status=${data.status}&role=${role}`);
     } catch (err) {
-      setError(friendlyError(err, 'Registration failed.'));
+      setError(getErrorMessage(err, 'Registration failed.'));
     } finally {
       setBusy(false);
     }

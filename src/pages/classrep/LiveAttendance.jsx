@@ -30,7 +30,7 @@ export default function LiveAttendance() {
             <Table rows={d.logs} empty="Nobody has checked in yet." columns={[
               { key: 'time', label: 'Time' }, { key: 'name', label: 'Student' }, { key: 'adm', label: 'Adm no' },
               { key: 'status', label: 'Status', render: (r) => <Badge tone={statusTone(r.status)}>{r.status}</Badge> },
-              { key: 'offline', label: 'Via', render: (r) => (r.offline ? 'Offline sync' : 'Live') },
+              { key: 'offline', label: 'Via', render: (r) => (r.method === 'manual' ? `Marked by rep${r.recordedBy ? ` · ${r.recordedBy}` : ''}` : r.offline ? 'Offline sync' : 'Live') },
             ]} />
           </>
         )}

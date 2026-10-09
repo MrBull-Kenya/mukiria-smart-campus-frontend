@@ -35,7 +35,7 @@ function EmailCard() {
             ) : (
               <Notice kind="warn">
                 Email is <strong>not set up</strong>, so nobody can reset a forgotten password by email. Missing: <strong>{e.missing.join(', ')}</strong>.
-                Add them to <code>backend/.env</code> (see <code>.env.example</code>) and restart the server. For Gmail use an App Password.
+                For local development, add them to <code>backend/.env</code> (see <code>.env.example</code>) and restart the backend. For the live app, add them as variables to the Railway backend service; Railway will restart it. For Gmail, use an App Password.
               </Notice>
             )}
             {e.configured && !e.frontendUrl && <Notice kind="warn">FRONTEND_URL is not set, so emails will contain a code instead of a clickable link. Set it to the address people open the app at.</Notice>}

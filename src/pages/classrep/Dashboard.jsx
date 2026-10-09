@@ -31,6 +31,7 @@ export default function RepDashboard() {
               { to: '/rep/temp-ids', icon: '🪪', label: 'Temporary IDs' },
               { to: '/rep/parent-alerts', icon: '📨', label: 'Parent alerts' },
               { to: '/rep/leaderboard', icon: '🏆', label: 'Leaderboard' },
+              { to: '/student/chat', icon: '💬', label: 'Class chat' },
               { to: '/rep/chat', icon: '📢', label: 'Announcements' },
               { to: '/rep/weekly-sheet', icon: '🖨️', label: 'Weekly sheet', hint: 'Print on Friday' },
               { to: '/rep/ministry-export', icon: '📄', label: 'Export report' },

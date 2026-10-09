@@ -6,7 +6,7 @@ import { Page, Async, Table, Badge, Btn, Card, Input, Notice } from '../../compo
 export default function MyClassMembers() {
   const state = useFetch('/classrep/members');
   const [open, setOpen] = useState(false);
-  const [f, setF] = useState({ adm_no: '', name: '', email: '', parent_email: '', parent_phone: '' });
+  const [f, setF] = useState({ adm_no: '', name: '', email: '', password: '', parent_email: '', parent_phone: '' });
   const [msg, setMsg] = useState(null);
   const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }));
 
@@ -14,8 +14,8 @@ export default function MyClassMembers() {
     e.preventDefault(); setMsg(null);
     try {
       const res = await api.post('/classrep/members', f);
-      setMsg({ kind: 'ok', text: `${res.data.name} added. Temporary password: ${res.data.tempPassword} (shown once; give it to the student).` });
-      setF({ adm_no: '', name: '', email: '', parent_email: '', parent_phone: '' }); setOpen(false); state.reload(true);
+      setMsg({ kind: 'ok', text: res.data.message });
+      setF({ adm_no: '', name: '', email: '', password: '', parent_email: '', parent_phone: '' }); setOpen(false); state.reload(true);
     } catch (err) { setMsg({ kind: 'error', text: getErrorMessage(err) }); }
   };
   const resetDevice = async (adm) => {
@@ -32,6 +32,7 @@ export default function MyClassMembers() {
           <Input label="Admission number" required value={f.adm_no} onChange={set('adm_no')} />
           <Input label="Full name" required value={f.name} onChange={set('name')} />
           <Input label="Email" type="email" required value={f.email} onChange={set('email')} />
+          <Input label="Password (8+ characters)" type="password" required minLength={8} autoComplete="new-password" value={f.password} onChange={set('password')} />
           <Input label="Parent email" type="email" value={f.parent_email} onChange={set('parent_email')} />
           <Input label="Parent phone" value={f.parent_phone} onChange={set('parent_phone')} />
           <Btn type="submit">Create student account</Btn>

@@ -2,11 +2,20 @@ import { CAMPUS } from '../config/campus';
 
 export const getCurrentPosition = () =>
   new Promise((resolve, reject) => {
-    if (!navigator.geolocation) return reject(new Error('Geolocation is not supported by your browser.'));
+    if (!navigator.geolocation) {
+      const error = new Error('Geolocation is not supported by your browser.');
+      error.name = 'GeolocationError';
+      return reject(error);
+    }
     navigator.geolocation.getCurrentPosition(
       (p) => resolve({ latitude: p.coords.latitude, longitude: p.coords.longitude, accuracy: p.coords.accuracy }),
-      (err) => reject(err),
-      { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
+      (err) => {
+        const error = new Error(err.message || 'Could not determine this device location.');
+        error.name = 'GeolocationError';
+        error.code = err.code;
+        reject(error);
+      },
+      { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 }
     );
   });
 

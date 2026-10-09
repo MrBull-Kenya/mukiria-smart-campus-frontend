@@ -5,6 +5,17 @@ import { useFetch } from '../../hooks/useFetch';
 import { getSocket } from '../../services/socket';
 import { Page, Async, Notice } from '../../components/ui';
 
+const chatTime = (message) => {
+  if (!message.timestamp) return message.time || '';
+  const date = new Date(message.timestamp);
+  if (Number.isNaN(date.getTime())) return message.time || '';
+  return new Intl.DateTimeFormat('en-KE', {
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: 'Africa/Nairobi',
+  }).format(date);
+};
+
 // Shared by students (/student/chat) and class reps (same class room)
 export function ChatRoom({ basePath }) {
   const { user } = useAuth();
@@ -41,28 +52,39 @@ export function ChatRoom({ basePath }) {
   };
 
   return (
-    <div className="bg-white border border-gray-100 rounded-2xl shadow-sm flex flex-col h-[65vh] max-w-2xl">
-      <div className="flex-1 overflow-y-auto p-4 space-y-3">
-        <Async state={history}>
-          {() => (messages.length === 0
-            ? <p className="text-sm text-gray-400 text-center py-8">No messages yet. Say hello 👋</p>
-            : messages.map((m) => (
-              <div key={m.id} className={`flex ${m.mine ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-[80%] rounded-2xl px-3 py-2 text-sm ${m.mine ? 'bg-blue-600 text-white' : m.announcement ? 'bg-amber-50 border border-amber-200 text-amber-900' : 'bg-gray-100 text-gray-800'}`}>
-                  {!m.mine && <p className="text-[11px] font-bold opacity-70">{m.announcement ? '📢 ' : ''}{m.sender}</p>}
-                  <p className="whitespace-pre-wrap break-words">{m.text}</p>
-                  <p className="text-[10px] opacity-60 text-right mt-0.5">{m.time}</p>
-                </div>
-              </div>
-            )))}
-        </Async>
-        <div ref={endRef} />
+    <div className="max-w-3xl rounded-3xl border border-slate-200 bg-gradient-to-br from-slate-100 via-blue-50 to-indigo-100 p-3 shadow-inner md:p-5">
+      <div className="flex h-[65vh] flex-col overflow-hidden rounded-2xl border border-white/80 bg-white/90 shadow-xl shadow-slate-300/40 backdrop-blur">
+        <div className="flex items-center justify-between border-b border-slate-100 bg-white/80 px-4 py-3">
+          <div>
+            <p className="text-sm font-bold text-slate-800">Class discussion</p>
+            <p className="text-[11px] text-slate-500">Messages are shared with your class</p>
+          </div>
+          <span className="rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide text-emerald-700">Live</span>
+        </div>
+        <div className="flex-1 overflow-y-auto bg-gradient-to-b from-slate-50 via-white to-blue-50/70 p-4">
+          <div className="space-y-3">
+            <Async state={history}>
+              {() => (messages.length === 0
+                ? <p className="py-8 text-center text-sm text-slate-400">No messages yet. Say hello 👋</p>
+                : messages.map((m) => (
+                  <div key={m.id} className={`flex ${m.mine ? 'justify-end' : 'justify-start'}`}>
+                    <div className={`max-w-[85%] rounded-2xl px-3.5 py-2.5 text-sm shadow-sm ${m.mine ? 'rounded-br-md bg-gradient-to-br from-blue-600 to-indigo-600 text-white' : m.announcement ? 'rounded-bl-md border border-amber-200 bg-amber-50 text-amber-950' : 'rounded-bl-md border border-slate-100 bg-white text-slate-800'}`}>
+                      {!m.mine && <p className="mb-1 text-[11px] font-bold text-slate-500">{m.announcement ? '📢 ' : ''}{m.sender}</p>}
+                      <p className="whitespace-pre-wrap break-words">{m.text}</p>
+                      <p className={`mt-1 text-right text-[10px] ${m.mine ? 'text-blue-100' : 'text-slate-400'}`}>{chatTime(m)}</p>
+                    </div>
+                  </div>
+                )))}
+            </Async>
+            <div ref={endRef} />
+          </div>
+        </div>
+        {error && <div className="px-4 pt-3"><Notice kind="error">{error}</Notice></div>}
+        <form onSubmit={send} className="flex gap-2 border-t border-slate-100 bg-white p-3">
+          <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Message your class…" className="flex-1 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-800 placeholder:text-slate-400 focus:border-blue-500 focus:bg-white focus:outline-none" />
+          <button className="rounded-xl bg-blue-600 px-4 text-xs font-bold text-white shadow-sm transition hover:bg-blue-700">Send</button>
+        </form>
       </div>
-      {error && <div className="px-4"><Notice kind="error">{error}</Notice></div>}
-      <form onSubmit={send} className="p-3 border-t border-gray-100 flex gap-2">
-        <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Message your class…" className="flex-1 bg-gray-50 border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-blue-500" />
-        <button className="bg-blue-600 text-white text-xs font-bold px-4 rounded-xl hover:bg-blue-700">Send</button>
-      </form>
     </div>
   );
 }

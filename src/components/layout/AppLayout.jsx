@@ -71,6 +71,9 @@ export default function AppLayout() {
       <main className="flex-1 w-full max-w-6xl mx-auto">
         <Outlet />
       </main>
+      <footer className="mt-6 border-t border-gray-200 px-4 py-4 text-center text-xs text-gray-500">
+        © 2026 BullSoft Technologies. All rights reserved.
+      </footer>
     </div>
   );
 }

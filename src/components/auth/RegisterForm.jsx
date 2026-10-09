@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { supabase, friendlyError } from '../../utils/supabase';
+import api, { getErrorMessage } from '../../services/api';
 import { Input, Notice } from '../ui';
 
 // Shared by the student and class-rep registration pages
@@ -12,15 +12,14 @@ export default function RegisterForm({ title, endpoint, isRep }) {
   const [error, setError] = useState('');
   const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }));
 
-  // Fetch classes directly from Supabase on mount
+  // Registration uses the same class list as the MySQL-backed application API.
   useEffect(() => {
     async function fetchClasses() {
       try {
-        const { data, error } = await supabase.from('classes').select('class_code, course, module').order('class_code');
-        if (error) throw error;
+        const { data } = await api.get('/classes/list');
         setClasses({ data: data || [], loading: false, error: null });
       } catch (err) {
-        setClasses({ data: [], loading: false, error: friendlyError(err, 'Failed to load classes') });
+        setClasses({ data: [], loading: false, error: getErrorMessage(err, 'Failed to load classes') });
       }
     }
     fetchClasses();
@@ -35,29 +34,20 @@ export default function RegisterForm({ title, endpoint, isRep }) {
     try {
       const { confirm, ...body } = f;
       const email = body.email.trim();
-      const { data, error: signErr } = await supabase.auth.signUp({
+      const { data } = await api.post(isRep ? '/auth/register-rep' : '/auth/register-student', {
+        ...body,
+        adm_no: body.adm_no.trim(),
+        name: body.name.trim(),
         email,
-        password: body.password,
-        options: {
-          data: {
-            role: isRep ? 'student_rep' : 'student',
-            name: body.name.trim(),
-            adm_no: body.adm_no.trim(),
-            class_code: body.class_code,
-            parent_email: isRep ? '' : body.parent_email.trim(),
-            parent_phone: isRep ? '' : body.parent_phone.trim(),
-          },
-        },
+        parent_email: isRep ? '' : body.parent_email.trim(),
+        parent_phone: isRep ? '' : body.parent_phone.trim(),
       });
-      if (signErr) throw signErr;
-      if (data.session) await supabase.auth.signOut(); // make them sign in properly
-
-      if (isRep) navigate(`/auth/verify-email?email=${encodeURIComponent(email)}&status=pending&role=student_rep`);
-      else navigate(`/auth/verify-email?email=${encodeURIComponent(email)}&status=approved&role=student`);
+      navigate(`/auth/verify-email?email=${encodeURIComponent(email)}&status=${data.status}&role=${isRep ? 'student_rep' : 'student'}`);
     } catch (err) {
-      setError(friendlyError(err, 'Registration failed.'));
+      setError(getErrorMessage(err, 'Registration failed.'));
+    } finally {
+      setBusy(false);
     }
-    setBusy(false);
   };
 
   return (

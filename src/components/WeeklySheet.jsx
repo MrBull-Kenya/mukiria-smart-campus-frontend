@@ -55,9 +55,10 @@ export default function WeeklySheet({ basePath, classCode = '' }) {
               <span className="text-xs text-gray-500">{d.classCode}{d.course ? ` · ${d.course}` : ''}</span>
             </Card>
             {msg && <Notice kind={msg.kind}>{msg.text}</Notice>}
-            <Notice kind="info">The PDF is the official attendance register (form <strong>MTTI/REG/CUR/01</strong>), <strong>one page per subject</strong>: ✓ present, ✗ absent, blank where no lesson was held.</Notice>
+            <Notice kind="info">The PDF is the official attendance register (form <strong>MTTI/REG/CUR/01</strong>) with one page for the whole class. It lists weekday subjects and exact session times; attendance is combined by time slot. ✓ present, ✗ absent, blank where no lesson was held.</Notice>
             {d.totals.sessions > 0 && d.weekNumber == null && <Notice kind="warn">The <strong>WEEK</strong> number will be blank on the printout because no term start date is set. Ask the Administrator to set it (Admin &gt; Settings), or write it in by hand.</Notice>}
             {d.totals.sessions > 0 && !d.department && <Notice kind="warn">The <strong>DEPARTMENT</strong> will be blank because this class has none set. The Administrator can add it on the Classes page.</Notice>}
+            {d.totals.sessions > 0 && !d.classTeacher && <Notice kind="warn">The <strong>CLASS TEACHER</strong> will be blank until an Administrator assigns an active teacher to this class on the Classes page.</Notice>}
             {d.weekendSkipped > 0 && <Notice kind="info">{d.weekendSkipped} lesson(s) held on Saturday/Sunday are not on the register (it has Monday–Friday columns). They are in the CSV.</Notice>}
 
             {d.sessions.length === 0 ? <Notice kind="info">No lessons were held in this week.</Notice> : (

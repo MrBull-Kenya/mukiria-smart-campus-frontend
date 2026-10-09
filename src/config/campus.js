@@ -7,7 +7,11 @@ const num = (value, fallback) => {
 
 export const INSTITUTION = 'Mukiria Technical Training Institute (MTTI)';
 
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api';
+const configuredApiUrl = import.meta.env.VITE_API_BASE_URL || import.meta.env.VITE_API_URL;
+const normalizedApiUrl = configuredApiUrl?.replace(/\/+$/, '');
+export const API_BASE_URL = normalizedApiUrl
+  ? (/\/api$/i.test(normalizedApiUrl) ? normalizedApiUrl : `${normalizedApiUrl}/api`)
+  : '/api';
 
 export const SOCKET_URL = (() => {
   if (import.meta.env.VITE_SOCKET_URL) return import.meta.env.VITE_SOCKET_URL;
@@ -18,9 +22,9 @@ export const SOCKET_URL = (() => {
 // Campus geofence. The SERVER is the authority (backend/src/config/mttiGPS.js); this copy
 // only powers the friendly distance hints in the UI. Keep both in sync.
 export const CAMPUS = {
-  latitude: num(import.meta.env.VITE_CAMPUS_LAT, -1.123),
-  longitude: num(import.meta.env.VITE_CAMPUS_LNG, 37.123),
-  radiusMeters: num(import.meta.env.VITE_CAMPUS_RADIUS_M, 300),
+  latitude: num(import.meta.env.VITE_CAMPUS_LAT, -0.0663),
+  longitude: num(import.meta.env.VITE_CAMPUS_LNG, 37.6642),
+  radiusMeters: num(import.meta.env.VITE_CAMPUS_RADIUS_M, 200),
 };
 
 export const STORAGE_KEYS = {

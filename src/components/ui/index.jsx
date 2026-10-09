@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 
 export const Page = ({ title, subtitle, actions, children }) => (
   <div className="p-4 md:p-6 space-y-5">
@@ -59,12 +59,49 @@ export const Btn = ({ variant = 'primary', className = '', ...p }) => {
   return <button {...p} className={`text-xs font-bold px-4 py-2 rounded-lg transition disabled:opacity-50 ${v} ${className}`} />;
 };
 
-export const Input = ({ label, className = '', ...p }) => (
-  <label className="block">
-    {label && <span className="block text-xs font-bold text-gray-700 mb-1">{label}</span>}
-    <input {...p} className={`w-full bg-gray-50 border border-gray-300 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-blue-500 ${className}`} />
-  </label>
-);
+export const PasswordInput = ({ label, className = '', ...p }) => {
+  const [visible, setVisible] = useState(false);
+  return (
+    <label className="block">
+      {label && <span className="block text-xs font-bold text-gray-700 mb-1">{label}</span>}
+      <span className="relative block">
+        <input
+          {...p}
+          type={visible ? 'text' : 'password'}
+          className={`w-full bg-gray-50 border border-gray-300 rounded-xl px-3 py-2.5 pr-11 text-sm focus:outline-none focus:border-blue-500 ${className}`}
+        />
+        <button
+          type="button"
+          onClick={() => setVisible((shown) => !shown)}
+          aria-label={visible ? 'Hide password' : 'Show password'}
+          aria-pressed={visible}
+          className="absolute inset-y-0 right-0 flex items-center px-3 text-gray-500 hover:text-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded-r-xl"
+        >
+          {visible ? (
+            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 3l18 18M10.6 10.7a2 2 0 002.7 2.7M9.9 5.2A10.8 10.8 0 0112 5c5 0 8.5 4.1 9.5 7-.4 1.2-1.2 2.4-2.3 3.5M6.2 6.2C4.2 7.5 2.9 9.5 2.5 12c1 2.9 4.5 7 9.5 7 1.3 0 2.5-.3 3.6-.8" />
+            </svg>
+          ) : (
+            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M2.5 12S6 5 12 5s9.5 7 9.5 7-3.5 7-9.5 7-9.5-7-9.5-7z" />
+              <circle cx="12" cy="12" r="2.5" />
+            </svg>
+          )}
+        </button>
+      </span>
+    </label>
+  );
+};
+
+export const Input = ({ label, className = '', type, ...p }) => {
+  if (type === 'password') return <PasswordInput label={label} className={className} {...p} />;
+  return (
+    <label className="block">
+      {label && <span className="block text-xs font-bold text-gray-700 mb-1">{label}</span>}
+      <input {...p} type={type} className={`w-full bg-gray-50 border border-gray-300 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-blue-500 ${className}`} />
+    </label>
+  );
+};
 
 // columns: [{ key, label, render?(row) }]
 export function Table({ columns, rows, empty = 'Nothing to show yet.' }) {

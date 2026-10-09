@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import api, { getErrorMessage } from '../../services/api';
+import { PasswordInput } from '../../components/ui';
 
 // Arrives from the emailed link (/auth/reset-password?email=...&token=...): then only the new password is asked for.
 // Without those parameters (typed code) the email and code boxes are shown too.
@@ -59,8 +60,8 @@ export default function ResetPassword() {
         <form onSubmit={handleUpdate} className="space-y-3">
           {!fromLink && <input type="email" required value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" className={input} />}
           {!fromLink && <input type="text" required value={token} onChange={(e) => setToken(e.target.value)} placeholder="Code from the email" className={`${input} font-mono`} />}
-          <input type="password" required minLength={8} autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="New password (8+ characters)" className={input} />
-          <input type="password" required autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder="Confirm new password" className={input} />
+          <PasswordInput required minLength={8} autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="New password (8+ characters)" className={input} />
+          <PasswordInput required autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder="Confirm new password" className={input} />
           <button type="submit" disabled={loading}
             className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold text-sm hover:bg-blue-700 disabled:opacity-50 transition">
             {loading ? 'Updating…' : 'Update password'}

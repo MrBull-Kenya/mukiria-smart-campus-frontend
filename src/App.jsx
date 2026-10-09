@@ -23,6 +23,7 @@ const RegisterHod = page(() => import('./pages/Auth/RegisterHod'));
 const RegisterAdmin = page(() => import('./pages/Auth/RegisterAdmin'));
 // Student
 const StudentDashboard = page(() => import('./pages/student/Dashboard'));
+const StudentTimetable = page(() => import('./pages/student/Timetable'));
 const ScanAttendance = page(() => import('./pages/student/ScanAttendance'));
 const MyRank = page(() => import('./pages/student/MyRank'));
 const MyHistory = page(() => import('./pages/student/MyHistory'));
@@ -33,6 +34,7 @@ const StudentChat = page(() => import('./pages/student/ClassChat'));
 // Class rep
 const RepDashboard = page(() => import('./pages/classrep/Dashboard'));
 const GenerateQR = page(() => import('./pages/classrep/GenerateQR'));
+const ManualAttendance = page(() => import('./pages/classrep/ManualAttendance'));
 const LiveAttendance = page(() => import('./pages/classrep/LiveAttendance'));
 const MyClassMembers = page(() => import('./pages/classrep/MyClassMembers'));
 const TimetableManager = page(() => import('./pages/classrep/TimetableManager'));
@@ -132,6 +134,7 @@ export default function App() {
                 <Route element={<ProtectedRoute roles={ACCESS.student} />}>
                   <Route path="/scan" element={<ScanAttendance />} />
                   <Route path="/student/dashboard" element={<StudentDashboard />} />
+                  <Route path="/student/timetable" element={<StudentTimetable />} />
                   <Route path="/student/rank" element={<MyRank />} />
                   <Route path="/student/history" element={<MyHistory />} />
                   <Route path="/student/digital-id" element={<DigitalID />} />
@@ -143,6 +146,7 @@ export default function App() {
                 <Route element={<ProtectedRoute roles={ACCESS.rep} />}>
                   <Route path="/rep/dashboard" element={<RepDashboard />} />
                   <Route path="/rep/generate-qr" element={<GenerateQR />} />
+                  <Route path="/rep/mark-present" element={<ManualAttendance />} />
                   <Route path="/rep/live-attendance" element={<LiveAttendance />} />
                   <Route path="/rep/members" element={<MyClassMembers />} />
                   <Route path="/rep/timetable" element={<TimetableManager />} />

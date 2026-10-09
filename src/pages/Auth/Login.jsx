@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
 import { ROLE_HOME } from '../../config/campus';
+import { PasswordInput } from '../../components/ui';
 
 export default function Login() {
   const [email, setEmail] = useState('');
@@ -49,9 +50,8 @@ export default function Login() {
             <label className="block text-xs font-bold text-gray-700">Password</label>
             <Link to="/auth/forgot-password" className="text-xs text-blue-600 hover:underline font-medium">Forgot?</Link>
           </div>
-          <input type="password" required autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)}
-            placeholder="••••••••"
-            className="w-full bg-gray-50 border border-gray-300 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-blue-500" />
+          <PasswordInput required autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)}
+            placeholder="••••••••" className="px-4 py-3" />
         </div>
 
         <button type="submit" disabled={loading}
