@@ -28,7 +28,7 @@ const health = await api('GET', '/health');
 ok('health check is available after database initialization', health.status === 200 && health.data?.status === 'ok');
 
 // ---------- seed ----------
-await pool.query("INSERT INTO classes (class_code, course, module, department) VALUES ('ITECH6','ICT Technician','Module 6','Computing & Informatics'), ('ITECH7','ICT Technician','Module 7','Computing & Informatics')");
+await pool.query("INSERT INTO classes (class_code, course, module, department) VALUES ('ITECH6','ICT Technician','Module 6','Computing & Informatics'), ('ITECH7','ICT Technician','Module 7','Computing & Informatics'), ('UPPER-DEPT','ICT Technician','Module 1','COMPUTING & INFORMATICS')");
 const pw = await bcrypt.hash('Passw0rd!', 10);
 await pool.query("INSERT INTO users (email, password, name, role, class_code) VALUES ('teacher@mtti.ac.ke', ?, 'Mr Teacher', 'teacher', NULL), ('hod@mtti.ac.ke', ?, 'Dr HOD', 'hod', NULL)", [pw, pw]);
 
@@ -43,6 +43,7 @@ ok('register s1', (await reg('1001', 'Alice')).status === 201);
 ok('register s2', (await reg('1002', 'Brian')).status === 201);
 ok('register s3', (await reg('1003', 'Carol')).status === 201);
 ok('register other-class student', (await reg('2001', 'Dan', 'ITECH7')).status === 201);
+ok('register into a class with an uppercase stored department', (await reg('2002', 'Eve', 'UPPER-DEPT')).status === 201);
 ok('duplicate email rejected', (await reg('1001', 'Alice')).status === 409);
 ok('duplicate email rejected regardless of letter case', (await api('POST', '/auth/register-student', { body: { adm_no: '1005', name: 'Email Duplicate', email: '1001@MTTI.AC.KE', department: 'Computing & Informatics', class_code: 'ITECH6', password: 'Passw0rd!' } })).status === 409);
 ok('duplicate admission number rejected regardless of case and surrounding whitespace', (await api('POST', '/auth/register-student', { body: { adm_no: ' 1001 ', name: 'Admission Duplicate', email: 'unique1005@mtti.ac.ke', department: 'Computing & Informatics', class_code: 'ITECH6', password: 'Passw0rd!' } })).status === 409);

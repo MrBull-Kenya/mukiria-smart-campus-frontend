@@ -12,7 +12,9 @@ export default function RegisterForm({ title, endpoint, isRep }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value, ...(k === 'department' ? { class_code: '' } : {}) }));
-  const departmentClasses = classes.data.filter((c) => c.department === f.department);
+  const departmentClasses = classes.data.filter(
+    (c) => String(c.department || '').trim().toLowerCase() === f.department.toLowerCase()
+  );
 
   // Registration uses the same class list as the MySQL-backed application API.
   useEffect(() => {

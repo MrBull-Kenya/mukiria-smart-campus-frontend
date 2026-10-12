@@ -182,7 +182,9 @@ async function createAccount(res, { role, status, adm_no, name, email, parent_em
 
   const [[cls]] = await pool.query('SELECT class_code, department FROM classes WHERE class_code = ?', [String(class_code).trim()]);
   if (!cls) return res.status(400).json({ error: `Unknown class code "${class_code}". Pick one from the list or ask the HOD to create it.` });
-  if (cls.department !== selectedDepartment) return res.status(400).json({ error: 'The selected class does not belong to the chosen department. Select a class from your department.' });
+  if (String(cls.department || '').trim().toLowerCase() !== selectedDepartment.toLowerCase()) {
+    return res.status(400).json({ error: 'The selected class does not belong to the chosen department. Select a class from your department.' });
+  }
 
   const hashed = await bcrypt.hash(password, 10);
   const connection = await pool.getConnection();
