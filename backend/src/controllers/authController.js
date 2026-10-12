@@ -140,8 +140,8 @@ export const authController = {
   // ---- Registration -------------------------------------------------------------------------
   async registerStudent(req, res) {
     try {
-      const { adm_no, name, email, parent_email, parent_phone, class_code, password } = req.body;
-      return await createAccount(res, { role: 'student', status: 'active', adm_no, name, email, parent_email, parent_phone, class_code, password });
+      const { adm_no, name, email, parent_email, parent_phone, department, class_code, password } = req.body;
+      return await createAccount(res, { role: 'student', status: 'active', adm_no, name, email, parent_email, parent_phone, department, class_code, password });
     } catch (err) {
       console.error('Register student error:', err);
       res.status(500).json({ error: 'Registration failed.' });
@@ -151,8 +151,8 @@ export const authController = {
   // Class reps are created 'pending' until the HOD approves them (FEAT: rep approval flow)
   async registerRep(req, res) {
     try {
-      const { adm_no, name, email, parent_email, parent_phone, class_code, password } = req.body;
-      return await createAccount(res, { role: 'student_rep', status: 'pending', adm_no, name, email, parent_email, parent_phone, class_code, password });
+      const { adm_no, name, email, parent_email, parent_phone, department, class_code, password } = req.body;
+      return await createAccount(res, { role: 'student_rep', status: 'pending', adm_no, name, email, parent_email, parent_phone, department, class_code, password });
     } catch (err) {
       console.error('Register rep error:', err);
       res.status(500).json({ error: 'Registration failed.' });
@@ -170,16 +170,19 @@ export const authController = {
   }
 };
 
-async function createAccount(res, { role, status, adm_no, name, email, parent_email, parent_phone, class_code, password }) {
-  if (!adm_no || !name || !email || !class_code || !password) return res.status(400).json({ error: 'Admission number, name, email, class and password are required.' });
+async function createAccount(res, { role, status, adm_no, name, email, parent_email, parent_phone, department, class_code, password }) {
+  if (!adm_no || !name || !email || !department || !class_code || !password) return res.status(400).json({ error: 'Admission number, name, email, department, class and password are required.' });
   if (String(password).length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+  const selectedDepartment = String(department).trim();
+  if (!STAFF_DEPARTMENTS.includes(selectedDepartment)) return res.status(400).json({ error: 'Choose a valid institutional department.' });
 
   const normalizedAdm = String(adm_no).trim().toUpperCase();
   const normalizedEmail = String(email).trim().toLowerCase();
   if (!normalizedAdm || !normalizedEmail) return res.status(400).json({ error: 'Admission number and email are required.' });
 
-  const [[cls]] = await pool.query('SELECT class_code FROM classes WHERE class_code = ?', [String(class_code).trim()]);
+  const [[cls]] = await pool.query('SELECT class_code, department FROM classes WHERE class_code = ?', [String(class_code).trim()]);
   if (!cls) return res.status(400).json({ error: `Unknown class code "${class_code}". Pick one from the list or ask the HOD to create it.` });
+  if (cls.department !== selectedDepartment) return res.status(400).json({ error: 'The selected class does not belong to the chosen department. Select a class from your department.' });
 
   const hashed = await bcrypt.hash(password, 10);
   const connection = await pool.getConnection();
@@ -226,11 +229,25 @@ async function createAccount(res, { role, status, adm_no, name, email, parent_em
 const isUniqueConstraintError = (err) =>
   err?.code === 'ER_DUP_ENTRY' || err?.code === 'SQLITE_CONSTRAINT_UNIQUE' || /unique constraint failed/i.test(err?.message || '');
 
+const STAFF_DEPARTMENTS = [
+  'Computing & Informatics',
+  'Mechanical & Automotive',
+  'Electrical & Electronics',
+  'Agriculture & Environmental Studies',
+  'Hospitality & Institution Management',
+  'Business Studies & Entrepreneurship',
+  'Building & Civil Engineering',
+  'Fashion & Design',
+  'Cosmetology',
+];
+
 async function registerStaff(req, res, role) {
   try {
     const { name, email, password } = req.body;
     if (!String(name || '').trim() || !String(email || '').trim() || !password) return res.status(400).json({ error: 'Name, email and password are required.' });
     if (String(password).length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+    const department = ['hod', 'teacher'].includes(role) ? String(req.body.department || '').trim() : '';
+    if (['hod', 'teacher'].includes(role) && !STAFF_DEPARTMENTS.includes(department)) return res.status(400).json({ error: 'Choose a valid institutional department.' });
     if (await UserModel.findByEmail(email.trim())) return res.status(409).json({ error: 'An account with this email already exists.' });
 
     // Bootstrap: while no active Administrator exists, the first one to register is approved immediately
@@ -239,11 +256,11 @@ async function registerStaff(req, res, role) {
       const [[row]] = await pool.query("SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND status = 'active'");
       if (!row.n) status = 'active';
     }
-    const created = await UserModel.create({ email: email.trim(), password: await bcrypt.hash(password, 10), name: name.trim(), role, class_code: null, device_id: null });
+    const created = await UserModel.create({ email: email.trim(), password: await bcrypt.hash(password, 10), name: name.trim(), role, class_code: null, device_id: null, department: department || null });
     await pool.query('UPDATE users SET status = ? WHERE id = ?', [status, created.insertId]);
     return res.status(201).json({
       message: status === 'active' ? 'Administrator account created. You can sign in now.' : 'Registered. An Administrator must approve your account before you can sign in.',
-      email: email.trim(), status, role,
+      email: email.trim(), status, role, ...(department ? { department } : {}),
     });
   } catch (err) {
     if (isUniqueConstraintError(err)) return res.status(409).json({ error: 'An account with this email already exists.' });

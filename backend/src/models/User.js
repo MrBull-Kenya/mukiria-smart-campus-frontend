@@ -20,10 +20,10 @@ export const UserModel = {
     await pool.query(query);
   },
 
-  async create({ email, password, name, role, class_code, device_id }) {
+  async create({ email, password, name, role, class_code, device_id, department }) {
     const [result] = await pool.query(
-      'INSERT INTO users (email, password, name, role, class_code, device_id) VALUES (?, ?, ?, ?, ?, ?)',
-      [email, password, name, role || 'student', class_code || null, device_id || null]
+      'INSERT INTO users (email, password, name, role, class_code, device_id, department) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [email, password, name, role || 'student', class_code || null, device_id || null, department || null]
     );
     return result;
   },

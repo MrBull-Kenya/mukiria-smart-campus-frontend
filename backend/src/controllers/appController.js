@@ -906,6 +906,17 @@ export const campus = {
 // ADMINISTRATOR: classes and staff accounts (replaces doing this by hand in the database)
 // =========================================================================================
 const STAFF_ROLES = ['teacher', 'hod', 'admin'];
+const STAFF_DEPARTMENTS = [
+  'Computing & Informatics',
+  'Mechanical & Automotive',
+  'Electrical & Electronics',
+  'Agriculture & Environmental Studies',
+  'Hospitality & Institution Management',
+  'Business Studies & Entrepreneurship',
+  'Building & Civil Engineering',
+  'Fashion & Design',
+  'Cosmetology',
+];
 const CLASS_CODE_RE = /^[A-Za-z0-9][A-Za-z0-9 /_.\-]{1,49}$/;
 const staffById = (id) => one("SELECT id, name, email, role, status FROM users WHERE id = ? AND role IN ('teacher','hod','admin')", [id]);
 
@@ -1143,7 +1154,7 @@ export const admin = {
   }),
   staff: wrap(async (req, res) => {
     const order = { pending: 0, active: 1, inactive: 2, rejected: 3 };
-    const rows = await q(`SELECT u.id, u.name, u.email, u.role, u.status, u.teacher_unit,
+    const rows = await q(`SELECT u.id, u.name, u.email, u.role, u.status, u.teacher_unit, u.department,
       c.class_teacher_class
       FROM users u LEFT JOIN (
         SELECT class_teacher_id, GROUP_CONCAT(class_code) AS class_teacher_class
@@ -1161,6 +1172,8 @@ export const admin = {
     const teacherUnit = role === 'teacher' ? String(req.body.teacher_unit || '').trim() : '';
     if (role === 'teacher' && !teacherUnit) return bad(res, 'Unit / Subject taught is required for teachers.');
     if (teacherUnit.length > 150) return bad(res, 'Unit / Subject taught must be 150 characters or fewer.');
+    const department = ['hod', 'teacher'].includes(role) ? String(req.body.department || '').trim() : '';
+    if (['hod', 'teacher'].includes(role) && !STAFF_DEPARTMENTS.includes(department)) return bad(res, 'Choose a valid institutional department.');
     const isClassTeacher = role === 'teacher' && req.body.is_class_teacher === true;
     const classCode = isClassTeacher ? String(req.body.class_code || '').trim() : '';
     if (isClassTeacher && !classCode) return bad(res, 'Choose a class for this class teacher.');
@@ -1182,8 +1195,8 @@ export const admin = {
         }
       }
       const [inserted] = await connection.query(
-        "INSERT INTO users (email, password, name, role, status, teacher_unit) VALUES (?, ?, ?, ?, 'active', ?)",
-        [emailAddress, passwordHash, name.trim(), role, teacherUnit || null]);
+        "INSERT INTO users (email, password, name, role, status, teacher_unit, department) VALUES (?, ?, ?, ?, 'active', ?, ?)",
+        [emailAddress, passwordHash, name.trim(), role, teacherUnit || null, department || null]);
       if (isClassTeacher) {
         const [updated] = await connection.query('UPDATE classes SET class_teacher_id = ? WHERE class_code = ? AND class_teacher_id IS NULL', [inserted.insertId, classCode]);
         if (updated.affectedRows !== 1) {

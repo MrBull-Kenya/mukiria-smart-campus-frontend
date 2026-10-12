@@ -7,6 +7,9 @@ dotenv.config();
 export function emailSettings() {
   const e = process.env;
   const port = parseInt(e.EMAIL_PORT, 10) || 587;
+  const gmailSender = e.EMAIL_HOST?.toLowerCase() === 'smtp.gmail.com' && e.EMAIL_USER
+    ? `"MTTI Smart Campus" <${e.EMAIL_USER}>`
+    : '';
   return {
     host: e.EMAIL_HOST || '',
     port,
@@ -14,7 +17,7 @@ export function emailSettings() {
     user: e.EMAIL_USER || '',
     pass: e.EMAIL_PASS || '',
     // Most providers (Gmail included) only accept mail "from" the account you log in with
-    from: e.EMAIL_FROM || (e.EMAIL_USER ? `"MTTI Smart Campus" <${e.EMAIL_USER}>` : ''),
+    from: gmailSender || e.EMAIL_FROM || (e.EMAIL_USER ? `"MTTI Smart Campus" <${e.EMAIL_USER}>` : ''),
     frontendUrl: (e.FRONTEND_URL || '').trim().replace(/\/+$/, ''), // base of the links inside emails
   };
 }

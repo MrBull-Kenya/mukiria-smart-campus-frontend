@@ -2,15 +2,17 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import api, { getErrorMessage } from '../../services/api';
 import { Input, Notice } from '../ui';
+import { DEPARTMENTS } from '../../constants/departments';
 
 // Shared by the student and class-rep registration pages
 export default function RegisterForm({ title, endpoint, isRep }) {
   const navigate = useNavigate();
   const [classes, setClasses] = useState({ data: [], loading: true, error: null });
-  const [f, setF] = useState({ adm_no: '', name: '', email: '', parent_email: '', parent_phone: '', class_code: '', password: '', confirm: '' });
+  const [f, setF] = useState({ adm_no: '', name: '', email: '', parent_email: '', parent_phone: '', department: '', class_code: '', password: '', confirm: '' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }));
+  const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value, ...(k === 'department' ? { class_code: '' } : {}) }));
+  const departmentClasses = classes.data.filter((c) => c.department === f.department);
 
   // Registration uses the same class list as the MySQL-backed application API.
   useEffect(() => {
@@ -59,12 +61,20 @@ export default function RegisterForm({ title, endpoint, isRep }) {
         <Input label="Full name" required value={f.name} onChange={set('name')} />
         <Input label="Email" type="email" required value={f.email} onChange={set('email')} />
         <label className="block">
+          <span className="block text-xs font-bold text-gray-700 mb-1">Department</span>
+          <select required value={f.department} onChange={set('department')} className="w-full bg-gray-50 border border-gray-300 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-blue-500">
+            <option value="">Select your department</option>
+            {DEPARTMENTS.map((department) => <option key={department} value={department}>{department}</option>)}
+          </select>
+        </label>
+        <label className="block">
           <span className="block text-xs font-bold text-gray-700 mb-1">Class</span>
-          <select required value={f.class_code} onChange={set('class_code')} className="w-full bg-gray-50 border border-gray-300 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-blue-500">
-            <option value="">{classes.loading ? 'Loading classes…' : 'Select your class'}</option>
-            {(classes.data || []).map((c) => <option key={c.class_code} value={c.class_code}>{c.class_code}{c.course ? ` · ${c.course}` : ''}</option>)}
+          <select required value={f.class_code} onChange={set('class_code')} disabled={!f.department || classes.loading} className="w-full bg-gray-50 border border-gray-300 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-blue-500 disabled:opacity-60">
+            <option value="">{classes.loading ? 'Loading classes…' : !f.department ? 'Select a department first' : 'Select your class'}</option>
+            {departmentClasses.map((c) => <option key={c.class_code} value={c.class_code}>{c.class_code}{c.course ? ` · ${c.course}` : ''}</option>)}
           </select>
           {classes.error && <span className="text-[11px] text-rose-600">{classes.error}</span>}
+          {!classes.loading && !classes.error && f.department && departmentClasses.length === 0 && <span className="text-[11px] text-amber-700">No classes are listed for this department. Please contact the Administrator.</span>}
         </label>
         {!isRep && <Input label="Parent / guardian email (for attendance alerts)" type="email" value={f.parent_email} onChange={set('parent_email')} />}
         {!isRep && <Input label="Parent / guardian phone" value={f.parent_phone} onChange={set('parent_phone')} />}

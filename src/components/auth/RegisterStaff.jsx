@@ -2,12 +2,13 @@ import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import api, { getErrorMessage } from '../../services/api';
 import { Input, Notice } from '../ui';
+import { DEPARTMENTS } from '../../constants/departments';
 
 // Shared by the Teacher, HOD and Administrator registration pages.
 // The database decides the status: staff wait for approval, and the very first Administrator is approved automatically.
 export default function RegisterStaff({ role, title, intro }) {
   const navigate = useNavigate();
-  const [f, setF] = useState({ name: '', email: '', password: '', confirm: '' });
+  const [f, setF] = useState({ name: '', email: '', password: '', confirm: '', department: '' });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }));
@@ -23,6 +24,7 @@ export default function RegisterStaff({ role, title, intro }) {
         email,
         password: f.password,
         name: f.name.trim(),
+        ...(['hod', 'teacher'].includes(role) ? { department: f.department } : {}),
       });
       navigate(`/auth/verify-email?email=${encodeURIComponent(email)}&status=${data.status}&role=${role}`);
     } catch (err) {
@@ -45,6 +47,15 @@ export default function RegisterStaff({ role, title, intro }) {
         <Input label="Full name" required value={f.name} onChange={set('name')}
           placeholder={role === 'teacher' ? 'Exactly as class reps will pick it, e.g. Mr. Otieno' : ''} />
         <Input label="Email" type="email" required value={f.email} onChange={set('email')} />
+        {['hod', 'teacher'].includes(role) && (
+          <label className="block">
+            <span className="block text-xs font-bold text-gray-700 mb-1">Department</span>
+            <select required value={f.department} onChange={set('department')} className="w-full bg-gray-50 border border-gray-300 rounded-xl px-3 py-2.5 text-sm">
+              <option value="">Choose your department</option>
+              {DEPARTMENTS.map((department) => <option key={department} value={department}>{department}</option>)}
+            </select>
+          </label>
+        )}
         <Input label="Password (8+ characters)" type="password" required value={f.password} onChange={set('password')} />
         <Input label="Confirm password" type="password" required value={f.confirm} onChange={set('confirm')} />
         <button disabled={busy} className="w-full bg-blue-600 text-white py-3 rounded-xl font-bold text-sm hover:bg-blue-700 disabled:opacity-50 transition">

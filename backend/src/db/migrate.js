@@ -5,6 +5,7 @@ import pool from '../config/db.js';
 const statements = [
   "ALTER TABLE users ADD COLUMN status VARCHAR(20) DEFAULT 'active'",
   'ALTER TABLE users ADD COLUMN teacher_unit VARCHAR(150) NULL',
+  'ALTER TABLE users ADD COLUMN department VARCHAR(100) NULL',
   'ALTER TABLE sessions ADD COLUMN signed_by INT NULL',
   'ALTER TABLE sessions ADD COLUMN signed_at DATETIME NULL',
   'ALTER TABLE sessions ADD COLUMN venue VARCHAR(100) NULL',
