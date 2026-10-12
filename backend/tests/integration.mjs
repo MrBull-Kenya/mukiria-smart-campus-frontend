@@ -1,5 +1,6 @@
 // Integration test: boots the REAL Express app on an in-memory SQLite database (see tests/run.sh)
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { inflateSync } from 'node:zlib';
 process.env.PORT = '5055'; process.env.CAMPUS_LAT = '-1.123'; process.env.CAMPUS_LNG = '37.123';
 const log = console.log; console.log = () => {}; // silence server chatter
@@ -377,6 +378,26 @@ ok('invalid class code rejected', (await addCls({ class_code: '!!', course: 'x',
 ok('missing course rejected', (await addCls({ class_code: 'ABC1', module: 'y' })).status === 400);
 const cls = await api('GET', '/admin/classes', { token: adminTok });
 ok('class list with member counts + rep', cls.data?.find((c) => c.code === 'ITECH6')?.students === 5 && cls.data.find((c) => c.code === 'ITECH6').rep === 'Rita Rep' && cls.data.find((c) => c.code === 'ITECH9/S/26')?.students === 0, JSON.stringify(cls.data));
+ok('teacher unit / subject is required when an administrator adds a teacher', (await api('POST', '/admin/staff', { token: adminTok, body: { role: 'teacher', name: 'Missing Unit', email: 'missingunit@mtti.ac.ke', password: 'Passw0rd!' } })).status === 400);
+const classTeacherAdd = await api('POST', '/admin/staff', { token: adminTok, body: {
+  role: 'teacher', name: 'Ms Class Teacher', email: 'classteacher@mtti.ac.ke', password: 'Passw0rd!',
+  teacher_unit: 'Electrical Installation', is_class_teacher: true, class_code: 'ITECH9/S/26',
+} });
+ok('administrator can add a teacher with a unit and class-teacher assignment', classTeacherAdd.status === 201, JSON.stringify(classTeacherAdd.data));
+const assignedClasses = await api('GET', '/admin/classes', { token: adminTok });
+const assignedClass = assignedClasses.data.find((c) => c.code === 'ITECH9/S/26');
+ok('new class teacher is assigned to the selected class', assignedClass.classTeacher === 'Ms Class Teacher' && assignedClass.classTeacherId === classTeacherAdd.data.id, JSON.stringify(assignedClass));
+ok('a class already assigned to a class teacher cannot be overwritten during staff creation', (await api('POST', '/admin/staff', { token: adminTok, body: {
+  role: 'teacher', name: 'Another Teacher', email: 'anotherteacher@mtti.ac.ke', password: 'Passw0rd!',
+  teacher_unit: 'Mathematics', is_class_teacher: true, class_code: 'ITECH9/S/26',
+} })).status === 409);
+const addedTeacherRow = (await api('GET', '/admin/staff', { token: adminTok })).data.find((r) => r.id === classTeacherAdd.data.id);
+ok('staff list shows a teacher unit and assigned class', addedTeacherRow.teacher_unit === 'Electrical Installation' && addedTeacherRow.class_teacher_class === 'ITECH9/S/26', JSON.stringify(addedTeacherRow));
+const assignedSheet = await api('GET', '/hod/weekly-sheet?class_code=ITECH9%2FS%2F26', { token: hod });
+ok('weekly sheet includes the assigned class teacher and teaching unit', assignedSheet.data.classTeacher === 'Ms Class Teacher' && assignedSheet.data.classTeacherSubject === 'Electrical Installation', JSON.stringify(assignedSheet.data));
+const assignedPdf = await api('GET', '/hod/weekly-sheet?class_code=ITECH9%2FS%2F26&format=pdf', { token: hod, raw: true });
+const assignedText = spawnSync('pdftotext', ['-layout', '-', '-'], { input: assignedPdf.buf, encoding: 'utf8' });
+if (assignedText.status === 0) ok('printable register header includes the class teacher and their unit / subject', assignedText.stdout.includes('Ms Class Teacher') && assignedText.stdout.includes('Electrical Installation'), assignedText.stdout.slice(0, 500));
 const adminMembersPath = `/admin/class-members?code=${encodeURIComponent('ITECH6')}`;
 const hodMembersPath = `/hod/class-members?code=${encodeURIComponent('ITECH6')}`;
 ok('class member list is administrator-only', (await api('GET', adminMembersPath, { token: hod })).status === 403 && (await api('GET', adminMembersPath)).status === 401);
@@ -454,7 +475,7 @@ for (const [who, tk] of [['student', s1], ['rep', repT], ['hod', hod]]) ok(`lega
 const direct = await api('POST', '/admin/staff', { token: adminTok, body: { role: 'hod', name: 'Dr Direct', email: 'direct@mtti.ac.ke', password: 'Passw0rd!' } });
 ok('admin adds staff directly (active immediately)', direct.status === 201 && (await login('direct@mtti.ac.ke', 'Passw0rd!', 'x')).data?.user?.role === 'hod');
 ok('cannot add a student through the staff form', (await api('POST', '/admin/staff', { token: adminTok, body: { role: 'student', name: 'x', email: 'x@x.ke', password: 'Passw0rd!' } })).status === 400);
-ok('staff form validates password + duplicate email', (await api('POST', '/admin/staff', { token: adminTok, body: { role: 'teacher', name: 'x', email: 'y@x.ke', password: '1' } })).status === 400 && (await api('POST', '/admin/staff', { token: adminTok, body: { role: 'teacher', name: 'x', email: 'direct@mtti.ac.ke', password: 'Passw0rd!' } })).status === 409);
+ok('staff form validates password + duplicate email', (await api('POST', '/admin/staff', { token: adminTok, body: { role: 'teacher', name: 'x', email: 'y@x.ke', password: '1', teacher_unit: 'Mathematics' } })).status === 400 && (await api('POST', '/admin/staff', { token: adminTok, body: { role: 'teacher', name: 'x', email: 'direct@mtti.ac.ke', password: 'Passw0rd!', teacher_unit: 'Mathematics' } })).status === 409);
 const teachNew = (await api('GET', '/admin/staff', { token: adminTok })).data.find((x) => x.email === 'newteach@mtti.ac.ke');
 const tNewTok = (await login('newteach@mtti.ac.ke', 'Passw0rd!', 'x')).data.token;
 ok('teacher token works before deactivation', (await api('GET', '/teacher/dashboard', { token: tNewTok })).status === 200);
@@ -634,7 +655,6 @@ ok('all 41 students are in the JSON and single-page register rows', longSheet.st
 
 // ---------- 12c. the official register (form MTTI/REG/CUR/01): slots, ticks/crosses, header fields ----------
 { // own block scope so these names can never clash with earlier sections
-const { spawnSync } = await import('node:child_process');
 const addDays = (iso, n) => { const d = new Date(`${iso}T00:00:00`); d.setDate(d.getDate() + n); return isoShift(Math.round((d - new Date(new Date().toDateString())) / 86400000)); };
 const mkStudent = async (adm, name, cls) => { const u = await pool.query("INSERT INTO users (email, password, name, role, class_code, status) VALUES (?, ?, ?, 'student', ?, 'active')", [`${adm}@mtti.ac.ke`, pw, name, cls]); await pool.query('INSERT INTO students (user_id, adm_no, parent_email, parent_phone) VALUES (?, ?, ?, ?)', [u[0].insertId, adm, '', '']); };
 const mkSession = async (cls, unit, lect, start, o = {}) => (await pool.query('INSERT INTO sessions (class_code, unit_name, lecturer_name, start_time, end_time, late_threshold_mins, is_active, ended_at, signed_at) VALUES (?, ?, ?, ?, ?, 15, 0, ?, ?)', [cls, unit, lect, start, start, o.end || null, o.signed || null]))[0].insertId;
@@ -916,7 +936,7 @@ await snap();
   delete process.env.FRONTEND_URL; nm = mails.length; await forgot('hod@mtti.ac.ke'); await mailAfter(nm);
   ok('without FRONTEND_URL the email carries a code instead of a link (links are never built from the request)', /[0-9a-f]{64}/.test(body(last())) && !/reset-password\?email=/.test(body(last())) && /code/i.test(body(last())));
   process.env.FRONTEND_URL = 'http://192.168.7.5:5173';
-  await api('POST', '/admin/staff', { token: adminTok, body: { role: 'teacher', name: '<b>Evil</b> & "Co"', email: 'evil@mtti.ac.ke', password: 'Passw0rd!' } });
+  await api('POST', '/admin/staff', { token: adminTok, body: { role: 'teacher', name: '<b>Evil</b> & "Co"', email: 'evil@mtti.ac.ke', password: 'Passw0rd!', teacher_unit: 'Electrical Installation' } });
   nm = mails.length; await forgot('evil@mtti.ac.ke'); await mailAfter(nm);
   ok('names are HTML-escaped inside the email\'s HTML (no injected markup)', htmlOf(last()).includes('&lt;b&gt;Evil&lt;/b&gt; &amp; &quot;Co&quot;') && !htmlOf(last()).includes('<b>Evil</b>') && htmlOf(last()).length > 200);
   // administrator-set passwords also sign the person out

@@ -1143,7 +1143,13 @@ export const admin = {
   }),
   staff: wrap(async (req, res) => {
     const order = { pending: 0, active: 1, inactive: 2, rejected: 3 };
-    const rows = await q("SELECT id, name, email, role, status FROM users WHERE role IN ('teacher','hod','admin') ORDER BY name");
+    const rows = await q(`SELECT u.id, u.name, u.email, u.role, u.status, u.teacher_unit,
+      c.class_teacher_class
+      FROM users u LEFT JOIN (
+        SELECT class_teacher_id, GROUP_CONCAT(class_code) AS class_teacher_class
+        FROM classes GROUP BY class_teacher_id
+      ) c ON c.class_teacher_id = u.id
+      WHERE u.role IN ('teacher','hod','admin') ORDER BY u.name`);
     rows.sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9));
     res.json(rows.map((r) => ({ ...r, isMe: r.id === req.user.id })));
   }),
@@ -1152,9 +1158,48 @@ export const admin = {
     if (!STAFF_ROLES.includes(role)) return bad(res, `Role must be one of: ${STAFF_ROLES.join(', ')}.`);
     if (!String(name || '').trim() || !String(email || '').trim()) return bad(res, 'Name and email are required.');
     if (String(password || '').length < 8) return bad(res, 'Password must be at least 8 characters.');
-    if (await one('SELECT id FROM users WHERE email = ?', [email.trim()])) return bad(res, 'An account with this email already exists.', 409);
-    const r = await exec("INSERT INTO users (email, password, name, role, status) VALUES (?, ?, ?, ?, 'active')", [email.trim(), await bcrypt.hash(password, 10), name.trim(), role]);
-    res.status(201).json({ id: r.insertId, message: `${name.trim()} added as ${role}. Give them the password; they can sign in straight away.` });
+    const teacherUnit = role === 'teacher' ? String(req.body.teacher_unit || '').trim() : '';
+    if (role === 'teacher' && !teacherUnit) return bad(res, 'Unit / Subject taught is required for teachers.');
+    if (teacherUnit.length > 150) return bad(res, 'Unit / Subject taught must be 150 characters or fewer.');
+    const isClassTeacher = role === 'teacher' && req.body.is_class_teacher === true;
+    const classCode = isClassTeacher ? String(req.body.class_code || '').trim() : '';
+    if (isClassTeacher && !classCode) return bad(res, 'Choose a class for this class teacher.');
+    const emailAddress = email.trim().toLowerCase();
+    if (await one('SELECT id FROM users WHERE LOWER(email) = ?', [emailAddress])) return bad(res, 'An account with this email already exists.', 409);
+    const passwordHash = await bcrypt.hash(password, 10);
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      if (isClassTeacher) {
+        const [classes] = await connection.query('SELECT class_code, class_teacher_id FROM classes WHERE class_code = ? FOR UPDATE', [classCode]);
+        if (!classes[0]) {
+          await connection.rollback();
+          return bad(res, 'The selected class does not exist.', 400);
+        }
+        if (classes[0].class_teacher_id != null) {
+          await connection.rollback();
+          return bad(res, 'The selected class already has a class teacher. Choose another class.', 409);
+        }
+      }
+      const [inserted] = await connection.query(
+        "INSERT INTO users (email, password, name, role, status, teacher_unit) VALUES (?, ?, ?, ?, 'active', ?)",
+        [emailAddress, passwordHash, name.trim(), role, teacherUnit || null]);
+      if (isClassTeacher) {
+        const [updated] = await connection.query('UPDATE classes SET class_teacher_id = ? WHERE class_code = ? AND class_teacher_id IS NULL', [inserted.insertId, classCode]);
+        if (updated.affectedRows !== 1) {
+          await connection.rollback();
+          return bad(res, 'The selected class already has a class teacher. Choose another class.', 409);
+        }
+      }
+      await connection.commit();
+      res.status(201).json({ id: inserted.insertId, message: `${name.trim()} added as ${role}. Give them the password; they can sign in straight away.` });
+    } catch (err) {
+      await connection.rollback();
+      if (err.code === 'ER_DUP_ENTRY' || String(err.code || '').startsWith('SQLITE_CONSTRAINT')) return bad(res, 'An account with this email already exists.', 409);
+      throw err;
+    } finally {
+      connection.release();
+    }
   }),
   staffDecision: wrap(async (req, res) => {
     const decision = req.body.decision === 'approve' ? 'approve' : req.body.decision === 'reject' ? 'reject' : null;
@@ -1227,7 +1272,8 @@ const generatedAt = (date) => `${new Intl.DateTimeFormat('en-GB', {
 async function buildWeeklySheet(cc, week) {
   const b = weekBounds(week);
   if (!b) return null;
-  const cls = await one(`SELECT c.course, c.module, c.department, teacher.name AS class_teacher
+  const cls = await one(`SELECT c.course, c.module, c.department, teacher.name AS class_teacher,
+      teacher.teacher_unit AS class_teacher_subject
     FROM classes c LEFT JOIN users teacher ON teacher.id = c.class_teacher_id AND teacher.role = 'teacher'
     WHERE c.class_code = ?`, [cc]);
   const sessions = await q('SELECT * FROM sessions WHERE class_code = ? AND start_time >= ? AND start_time < ? ORDER BY start_time, id', [cc, sqlDate(new Date(b.mon.getTime() - NAIROBI_OFFSET_MS)), sqlDate(new Date(b.next.getTime() - NAIROBI_OFFSET_MS))]);
@@ -1315,6 +1361,7 @@ async function buildWeeklySheet(cc, week) {
   return {
     classCode: cc, course: cls ? `${cls.course} · ${cls.module}` : '', department: cls?.department || '',
     classTeacher: cls?.class_teacher || '',
+    classTeacherSubject: cls?.class_teacher_subject || '',
     subjectsBySlot: [...subjectsBySlot.entries()].map(([slot, units]) => ({ slot, units: [...units].sort((a, b) => a.localeCompare(b)).join(' / ') })),
     classRegister,
     weekStart: isoDay(b.mon), weekEnd: isoDay(b.sun), weekLabel: `${dayLabel(b.mon)} - ${dayLabel(b.sun)} ${b.sun.getFullYear()}`,
@@ -1373,9 +1420,10 @@ function sendRegisterPdf(res, sh, filename) {
     x = field('DEPARTMENT:', sh.department, x, 70, 205);
     field('YEAR:', sh.year, x, 70, 66);
     x = 100;
-    x = field('CLASS TEACHER :', sh.classTeacher, x, 88, 280);
+    x = field('CLASS TEACHER:', sh.classTeacher, x, 88, 225);
+    x = field('TEACHER UNIT/SUBJECT:', sh.classTeacherSubject, x, 88, 250);
     const allSubjects = [...new Set(sh.subjects.map((subject) => subject.unit).filter(Boolean))].join(' / ');
-    field('SUBJECT :', allSubjects, x, 88, 405);
+    field('SUBJECTS THIS WEEK:', allSubjects, x, 88, 225);
 
     const y0 = tableTop, yIn = y0 + hDay + hTime, yOut = yIn + hIn, ySubject = yOut + hOut, yLab = ySubject + hSubject, yBody = y0 + headH;
     box(L, y0, wSN, headH); label('S/N\nO', L, y0, wSN, headH, { size: 7, bold: true });

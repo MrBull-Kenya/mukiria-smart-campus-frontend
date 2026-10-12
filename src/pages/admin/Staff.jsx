@@ -9,12 +9,13 @@ const ROLE_LABEL = { teacher: 'Teacher', hod: 'HOD', admin: 'Administrator' };
 
 export default function AdminStaff() {
   const state = useFetch('/admin/staff');
-  const [f, setF] = useState({ role: 'teacher', name: '', email: '', password: '' });
+  const classesState = useFetch('/admin/classes');
+  const [f, setF] = useState({ role: 'teacher', name: '', email: '', password: '', teacher_unit: '', is_class_teacher: false, class_code: '' });
   const [msg, setMsg] = useState(null);
   const set = (k) => (e) => setF((x) => ({ ...x, [k]: e.target.value }));
   const run = async (fn) => { setMsg(null); try { const res = await fn(); setMsg({ kind: 'ok', text: res.data.message }); state.reload(true); return true; } catch (err) { setMsg({ kind: 'error', text: getErrorMessage(err) }); return false; } };
 
-  const add = async (e) => { e.preventDefault(); if (await run(() => api.post('/admin/staff', f))) setF({ role: 'teacher', name: '', email: '', password: '' }); };
+  const add = async (e) => { e.preventDefault(); if (await run(() => api.post('/admin/staff', f))) setF({ role: 'teacher', name: '', email: '', password: '', teacher_unit: '', is_class_teacher: false, class_code: '' }); };
   const decide = (id, decision) => run(() => api.post(`/admin/staff/${id}/decision`, { decision }));
   const setStatus = (id, status) => run(() => api.post(`/admin/staff/${id}/status`, { status }));
   const resetPassword = (u) => {
@@ -25,6 +26,7 @@ export default function AdminStaff() {
   return (
     <Page title="Staff accounts" subtitle="Teachers, HODs and Administrators">
       {msg && <Notice kind={msg.kind}>{msg.text}</Notice>}
+      {classesState.error && <Notice kind="error">Could not load classes for class-teacher assignment: {classesState.error}</Notice>}
 
       <Async state={state}>
         {(rows) => {
@@ -45,11 +47,31 @@ export default function AdminStaff() {
                 <form onSubmit={add} className="space-y-3">
                   <p className="text-sm font-bold text-gray-800">Add a staff member (active immediately)</p>
                   <label className="block"><span className="block text-xs font-bold text-gray-700 mb-1">Role</span>
-                    <select value={f.role} onChange={set('role')} className="w-full bg-gray-50 border border-gray-300 rounded-xl px-3 py-2.5 text-sm">
+                    <select value={f.role} onChange={(e) => setF((x) => ({ ...x, role: e.target.value, is_class_teacher: false, class_code: '' }))} className="w-full bg-gray-50 border border-gray-300 rounded-xl px-3 py-2.5 text-sm">
                       <option value="teacher">Teacher</option><option value="hod">Head of Department (HOD)</option><option value="admin">Administrator</option>
                     </select></label>
                   <Input label="Full name" required value={f.name} onChange={set('name')} placeholder={f.role === 'teacher' ? "Exactly as class reps will pick it, e.g. Mr. Otieno" : ''} />
                   <Input label="Email" type="email" required value={f.email} onChange={set('email')} />
+                  {f.role === 'teacher' && (
+                    <>
+                      <Input label="Unit / Subject taught" required maxLength={150} value={f.teacher_unit} onChange={set('teacher_unit')} placeholder="e.g. Electrical Installation" />
+                      <label className="flex items-center gap-2 text-sm font-semibold text-gray-700">
+                        <input type="checkbox" checked={f.is_class_teacher} onChange={(e) => setF((x) => ({ ...x, is_class_teacher: e.target.checked, class_code: '' }))} className="h-4 w-4 rounded border-gray-300 text-blue-600" />
+                        This teacher is a class teacher
+                      </label>
+                      {f.is_class_teacher && (
+                        <label className="block">
+                          <span className="block text-xs font-bold text-gray-700 mb-1">Class to assign</span>
+                          <select required value={f.class_code} onChange={set('class_code')} disabled={classesState.loading || !classesState.data} className="w-full bg-gray-50 border border-gray-300 rounded-xl px-3 py-2.5 text-sm disabled:opacity-60">
+                            <option value="">{classesState.loading ? 'Loading classes…' : 'Choose an unassigned class'}</option>
+                            {(classesState.data || []).filter((c) => !c.classTeacherId).map((c) => <option key={c.code} value={c.code}>{c.code}</option>)}
+                          </select>
+                          {!classesState.loading && classesState.data?.length === 0 && <p className="mt-1 text-xs text-amber-700">Add a class on the Classes page before assigning a class teacher.</p>}
+                          {!classesState.loading && classesState.data?.length > 0 && classesState.data.every((c) => c.classTeacherId) && <p className="mt-1 text-xs text-amber-700">All classes already have a class teacher assigned.</p>}
+                        </label>
+                      )}
+                    </>
+                  )}
                   <div className="flex gap-2 items-end">
                     <div className="flex-1"><Input label="Password (8+ characters)" type="password" required autoComplete="new-password" value={f.password} onChange={set('password')} /></div>
                     <Btn type="button" variant="ghost" onClick={() => setF((x) => ({ ...x, password: generatePassword() }))}>Generate</Btn>
@@ -62,6 +84,8 @@ export default function AdminStaff() {
               <Table rows={rows} empty="No staff accounts yet." columns={[
                 { key: 'name', label: 'Name', render: (r) => <>{r.name}{r.isMe && <span className="ml-1 text-[10px] text-blue-600 font-bold">YOU</span>}</> },
                 { key: 'email', label: 'Email' }, { key: 'role', label: 'Role', render: (r) => ROLE_LABEL[r.role] },
+                { key: 'teacher_unit', label: 'Unit / Subject', render: (r) => r.role === 'teacher' ? r.teacher_unit || <span className="text-amber-600 text-xs">not set</span> : '—' },
+                { key: 'class_teacher_class', label: 'Class teacher for', render: (r) => r.role === 'teacher' ? r.class_teacher_class || '—' : '—' },
                 { key: 'status', label: 'Status', render: (r) => <Badge tone={statusTone(r.status === 'inactive' ? 'rejected' : r.status)}>{r.status}</Badge> },
                 { key: 'a', label: '', render: (r) => r.isMe || r.status === 'pending' ? null : (
                   <div className="flex gap-3 text-[11px] font-bold">

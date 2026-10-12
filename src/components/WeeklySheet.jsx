@@ -63,6 +63,7 @@ export default function WeeklySheet({ basePath, classCode = '' }) {
             {d.totals.sessions > 0 && d.weekNumber == null && <Notice kind="warn">The <strong>WEEK</strong> number will be blank on the printout because no term start date is set. Ask the Administrator to set it (Admin &gt; Settings), or write it in by hand.</Notice>}
             {d.totals.sessions > 0 && !d.department && <Notice kind="warn">The <strong>DEPARTMENT</strong> will be blank because this class has none set. The Administrator can add it on the Classes page.</Notice>}
             {d.totals.sessions > 0 && !d.classTeacher && <Notice kind="warn">The <strong>CLASS TEACHER</strong> will be blank until an Administrator assigns an active teacher to this class on the Classes page.</Notice>}
+            {d.totals.sessions > 0 && d.classTeacher && !d.classTeacherSubject && <Notice kind="warn">The class teacher's <strong>UNIT / SUBJECT</strong> is not set. An Administrator can add it when creating the teacher account.</Notice>}
             {d.weekendSkipped > 0 && <Notice kind="info">{d.weekendSkipped} lesson(s) held on Saturday/Sunday are not on the register (it has Monday–Friday columns). They are in the CSV.</Notice>}
 
             {d.sessions.length === 0 ? <Notice kind="info">No lessons were held in this week.</Notice> : (
