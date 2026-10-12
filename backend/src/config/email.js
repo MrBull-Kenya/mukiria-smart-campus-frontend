@@ -6,28 +6,68 @@ dotenv.config();
 // Settings come from the process environment: backend/.env locally, or the host's service variables in production.
 export function emailSettings() {
   const e = process.env;
+  const provider = (e.EMAIL_PROVIDER || 'smtp').trim().toLowerCase();
   const port = parseInt(e.EMAIL_PORT, 10) || 587;
   const gmailSender = e.EMAIL_HOST?.toLowerCase() === 'smtp.gmail.com' && e.EMAIL_USER
     ? `"MTTI Smart Campus" <${e.EMAIL_USER}>`
     : '';
   return {
+    provider,
     host: e.EMAIL_HOST || '',
     port,
     secure: e.EMAIL_SECURE ? e.EMAIL_SECURE === 'true' : port === 465, // 465 = implicit TLS, 587 = STARTTLS
-    user: e.EMAIL_USER || '',
+    user: provider === 'smtp' ? e.EMAIL_USER || '' : '',
     pass: e.EMAIL_PASS || '',
+    apiKey: e.RESEND_API_KEY || '',
     // Most providers (Gmail included) only accept mail "from" the account you log in with
-    from: gmailSender || e.EMAIL_FROM || (e.EMAIL_USER ? `"MTTI Smart Campus" <${e.EMAIL_USER}>` : ''),
+    from: provider === 'resend'
+      ? e.EMAIL_FROM || ''
+      : gmailSender || e.EMAIL_FROM || (e.EMAIL_USER ? `"MTTI Smart Campus" <${e.EMAIL_USER}>` : ''),
     frontendUrl: (e.FRONTEND_URL || '').trim().replace(/\/+$/, ''), // base of the links inside emails
   };
 }
 
-export const missingEmailSettings = () => ['EMAIL_HOST', 'EMAIL_USER', 'EMAIL_PASS'].filter((k) => !process.env[k]);
+export function missingEmailSettings() {
+  const { provider } = emailSettings();
+  if (provider === 'resend') return ['RESEND_API_KEY', 'EMAIL_FROM'].filter((key) => !process.env[key]);
+  if (provider !== 'smtp') return [`EMAIL_PROVIDER (unsupported: ${provider})`];
+  return ['EMAIL_HOST', 'EMAIL_USER', 'EMAIL_PASS'].filter((key) => !process.env[key]);
+}
+
 export const isEmailConfigured = () => missingEmailSettings().length === 0;
 
 export async function sendEmail({ to, subject, html, text }) {
   if (!isEmailConfigured()) throw Object.assign(new Error('Email is not configured'), { code: 'ENOTCONFIGURED' });
   const s = emailSettings();
+  if (s.provider === 'resend') {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+    try {
+      const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${s.apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ from: s.from, to: [to], subject, text, html }),
+        signal: controller.signal,
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw Object.assign(new Error(result.message || result.name || 'Resend rejected the email request.'), {
+          code: 'ERESEND',
+          status: response.status,
+          response: result.message || result.name || '',
+        });
+      }
+      return result;
+    } catch (err) {
+      if (err?.code === 'ERESEND') throw err;
+      throw Object.assign(new Error(err?.name === 'AbortError' ? 'Resend API request timed out.' : 'Could not connect to the Resend API.'), {
+        code: 'ERESEND_NETWORK',
+      });
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
   const transport = nodemailer.createTransport({
     host: s.host, port: s.port, secure: s.secure,
     connectionTimeout: 8000, greetingTimeout: 8000, socketTimeout: 10000, // fail fast instead of hanging for minutes
@@ -47,7 +87,11 @@ export async function sendEmail({ to, subject, html, text }) {
 export function describeEmailError(err) {
   const code = err?.code, resp = String(err?.response || '');
   const s = emailSettings();
-  if (code === 'ENOTCONFIGURED') return 'Email is not configured. Set EMAIL_HOST, EMAIL_USER and EMAIL_PASS in backend/.env locally or in the deployed backend service variables, then restart the backend.';
+  if (code === 'ENOTCONFIGURED') return `Email is not configured. Set ${missingEmailSettings().join(' and ')} in backend/.env locally or in the deployed backend service variables, then restart the backend.`;
+  if (code === 'ERESEND_NETWORK') return 'Cannot reach the Resend email API over HTTPS. Check the backend network connection and try again.';
+  if (code === 'ERESEND' && (err.status === 401 || err.status === 403)) return 'Resend rejected the API key. Check RESEND_API_KEY in the backend service variables.';
+  if (code === 'ERESEND' && err.status === 422) return 'Resend rejected the sender or recipient. Verify EMAIL_FROM uses a sender/domain verified in Resend; test mode may only allow delivery to your account email.';
+  if (code === 'ERESEND') return `Resend could not accept the email (HTTP ${err.status || 'error'}): ${resp || err.message}`;
   if (code === 'EAUTH' || /^535|authentication/i.test(resp)) return 'The mail server rejected the username or password. For Gmail use an App Password (Google Account > Security > 2-Step Verification > App passwords), not your normal password.';
   const text = `${code || ''} ${err?.message || ''}`;
   // nodemailer reports a refused/unknown host as code ESOCKET with the real cause only in the message

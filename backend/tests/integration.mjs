@@ -831,8 +831,8 @@ await snap();
   // ----- A. email NOT configured yet -----
   const unconfKnown = await forgot('1001@mtti.ac.ke'), unconfUnknown = await forgot('nobody@example.com');
   ok('without email settings the form says so (503), identically for known and unknown addresses', unconfKnown.status === 503 && unconfUnknown.status === 503 && unconfKnown.data.error === unconfUnknown.data.error && /not set up/.test(unconfKnown.data.error), JSON.stringify(unconfKnown.data));
-  const priorEmailEnv = Object.fromEntries(['EMAIL_HOST', 'EMAIL_USER', 'EMAIL_FROM'].map((key) => [key, process.env[key]]));
-  Object.assign(process.env, { EMAIL_HOST: 'smtp.gmail.com', EMAIL_USER: 'authenticated@example.com', EMAIL_FROM: 'Other Sender <other@example.com>' });
+  const priorEmailEnv = Object.fromEntries(['EMAIL_PROVIDER', 'EMAIL_HOST', 'EMAIL_USER', 'EMAIL_FROM'].map((key) => [key, process.env[key]]));
+  Object.assign(process.env, { EMAIL_PROVIDER: 'smtp', EMAIL_HOST: 'smtp.gmail.com', EMAIL_USER: 'authenticated@example.com', EMAIL_FROM: 'Other Sender <other@example.com>' });
   const { emailSettings: getEmailSettings } = await import('./src/config/email.js');
   ok('Gmail sender always matches its authenticated account', getEmailSettings().from === '"MTTI Smart Campus" <authenticated@example.com>', getEmailSettings().from);
   process.env.EMAIL_HOST = 'smtp.custom.example';
@@ -873,7 +873,7 @@ await snap();
   });
   await new Promise((r) => smtp.listen(0, '127.0.0.1', r));
   const smtpPort = smtp.address().port;
-  Object.assign(process.env, { EMAIL_HOST: '127.0.0.1', EMAIL_PORT: String(smtpPort), EMAIL_USER: 'mailer@mtti.test', EMAIL_PASS: 'smtp-pass', FRONTEND_URL: 'http://192.168.7.5:5173' });
+  Object.assign(process.env, { EMAIL_PROVIDER: 'smtp', EMAIL_HOST: '127.0.0.1', EMAIL_PORT: String(smtpPort), EMAIL_USER: 'mailer@mtti.test', EMAIL_PASS: 'smtp-pass', FRONTEND_URL: 'http://192.168.7.5:5173' });
 
   const qp = (x) => x.replace(/=\r?\n/g, '').replace(/=([0-9A-Fa-f]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
   const decodeMail = (raw) => raw.split(/\r?\n--[^\r\n]+/).map((p) => { const [h, ...rest] = p.split(/\r?\n\r?\n/); const body = rest.join('\n\n'); return /quoted-printable/i.test(h) ? qp(body) : /base64/i.test(h) ? Buffer.from(body.replace(/\s+/g, ''), 'base64').toString() : p; }).join('\n');
@@ -904,6 +904,40 @@ await snap();
   const noServer = await api('POST', '/admin/email/test', { token: adminTok, body: { to: 'tester@example.com' } });
   process.env.EMAIL_PORT = String(smtpPort);
   ok('unreachable mail server gives a clear message naming host:port', noServer.status === 502 && /Cannot reach the mail server 127\.0\.0\.1:1/.test(noServer.data.error), JSON.stringify(noServer.data));
+
+  // ----- Resend HTTPS provider: fake fetch response; never contact the real service in tests -----
+  const savedProviderEnv = Object.fromEntries(['EMAIL_PROVIDER', 'EMAIL_FROM', 'RESEND_API_KEY'].map((key) => [key, process.env[key]]));
+  const nativeFetch = globalThis.fetch;
+  const resendCalls = [];
+  let resendStatus = 200;
+  process.env.EMAIL_PROVIDER = 'resend';
+  process.env.EMAIL_FROM = 'MTTI Test <no-reply@example.test>';
+  process.env.RESEND_API_KEY = 're_test_secret';
+  globalThis.fetch = async (input, init) => {
+    if (String(input) !== 'https://api.resend.com/emails') return nativeFetch(input, init);
+    resendCalls.push({ url: String(input), headers: init.headers, body: JSON.parse(init.body) });
+    return new Response(JSON.stringify(resendStatus === 200 ? { id: 'test-email-id' } : { message: 'The sender domain is not verified' }), {
+      status: resendStatus, headers: { 'Content-Type': 'application/json' },
+    });
+  };
+  try {
+    const resendStatusResponse = await api('GET', '/admin/email', { token: adminTok });
+    ok('Resend configuration is shown without exposing its API key', resendStatusResponse.status === 200 && resendStatusResponse.data.configured && resendStatusResponse.data.provider === 'resend' && resendStatusResponse.data.host === null && resendStatusResponse.data.from === process.env.EMAIL_FROM && !JSON.stringify(resendStatusResponse.data).includes('re_test_secret'), JSON.stringify(resendStatusResponse.data));
+    const resendTest = await api('POST', '/admin/email/test', { token: adminTok, body: { to: 'resend-test@example.test' } });
+    ok('Resend sends test mail over HTTPS using the configured sender and API key', resendTest.status === 200 && resendCalls.length === 1 && resendCalls[0].url === 'https://api.resend.com/emails' && resendCalls[0].headers.Authorization === 'Bearer re_test_secret' && resendCalls[0].body.from === process.env.EMAIL_FROM && resendCalls[0].body.to[0] === 'resend-test@example.test', JSON.stringify(resendTest.data));
+    resendStatus = 422;
+    const rejectedResend = await api('POST', '/admin/email/test', { token: adminTok, body: { to: 'resend-test@example.test' } });
+    ok('Resend unverified sender error explains the required setup', rejectedResend.status === 502 && /sender\/recipient/.test(rejectedResend.data.error) && /verified in Resend/.test(rejectedResend.data.error), JSON.stringify(rejectedResend.data));
+    delete process.env.RESEND_API_KEY;
+    const missingResendKey = await api('GET', '/admin/email', { token: adminTok });
+    ok('Resend status identifies missing key and sender settings', missingResendKey.status === 200 && !missingResendKey.data.configured && missingResendKey.data.missing.includes('RESEND_API_KEY'), JSON.stringify(missingResendKey.data));
+  } finally {
+    globalThis.fetch = nativeFetch;
+    for (const [key, value] of Object.entries(savedProviderEnv)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
 
   // ----- D. forgot-password email for EVERY kind of user -----
   const roles = [['student', '1001@mtti.ac.ke'], ['class rep', '1000@mtti.ac.ke'], ['teacher', 'teacher@mtti.ac.ke'], ['HOD', 'hod@mtti.ac.ke'], ['administrator', 'admin1@mtti.ac.ke']];

@@ -25,17 +25,24 @@ function EmailCard() {
         {(e) => (
           <>
             {e.configured ? (
-              <div className="text-xs text-gray-700 space-y-1">
-                <p><Badge tone="green">Configured</Badge></p>
-                <p>Mail server: <strong>{e.host}:{e.port}</strong> ({e.secure ? 'secure connection' : 'STARTTLS'})</p>
-                <p>Signs in as: <strong>{e.user}</strong></p>
-                <p>Sends from: <strong>{e.from}</strong></p>
-                <p>Links in emails open: <strong>{e.frontendUrl || 'not set'}</strong></p>
-              </div>
+              <>
+                <div className="text-xs text-gray-700 space-y-1">
+                  <p><Badge tone="green">Configured</Badge></p>
+                  {e.provider === 'resend' ? <p>Delivery: <strong>Resend API (HTTPS)</strong></p> : (
+                    <>
+                      <p>Mail server: <strong>{e.host}:{e.port}</strong> ({e.secure ? 'secure connection' : 'STARTTLS'})</p>
+                      <p>Signs in as: <strong>{e.user}</strong></p>
+                    </>
+                  )}
+                  <p>Sends from: <strong>{e.from}</strong></p>
+                  <p>Links in emails open: <strong>{e.frontendUrl || 'not set'}</strong></p>
+                </div>
+                {e.provider === 'smtp' && e.host === 'smtp.gmail.com' && <Notice kind="warn">This Railway backend cannot reach Gmail SMTP. Switch to Resend over HTTPS by setting EMAIL_PROVIDER=resend, RESEND_API_KEY, and EMAIL_FROM to a sender on a verified Resend domain.</Notice>}
+              </>
             ) : (
               <Notice kind="warn">
                 Email is <strong>not set up</strong>, so nobody can reset a forgotten password by email. Missing: <strong>{e.missing.join(', ')}</strong>.
-                For local development, add them to <code>backend/.env</code> (see <code>.env.example</code>) and restart the backend. For the live app, add them as variables to the Railway backend service; Railway will restart it. For Gmail, use an App Password.
+                Set the missing variables in <code>backend/.env</code> locally or in the Railway backend service. For Resend, create an API key and verify the sender domain first.
               </Notice>
             )}
             {e.configured && !e.frontendUrl && <Notice kind="warn">FRONTEND_URL is not set, so emails will contain a code instead of a clickable link. Set it to the address people open the app at.</Notice>}

@@ -1142,7 +1142,7 @@ export const admin = {
   emailStatus: wrap(async (req, res) => {
     const s = emailSettings();
     const mask = (e) => (e ? e.replace(/^(.{2}).*(@.*)$/, '$1***$2') : null);
-    res.json({ configured: isEmailConfigured(), missing: missingEmailSettings(), host: s.host || null, port: s.port, secure: s.secure, user: mask(s.user), from: s.from || null, frontendUrl: s.frontendUrl || null });
+    res.json({ configured: isEmailConfigured(), missing: missingEmailSettings(), provider: s.provider, host: s.provider === 'smtp' ? s.host || null : null, port: s.provider === 'smtp' ? s.port : null, secure: s.provider === 'smtp' ? s.secure : null, user: mask(s.user), from: s.from || null, frontendUrl: s.frontendUrl || null });
   }),
   emailTest: wrap(async (req, res) => {
     if (!allow(`email-test:${req.user.id}`, 10)) return bad(res, 'Too many test emails. Wait a few minutes.', 429);
