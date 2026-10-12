@@ -17,6 +17,12 @@ const statements = [
      setting_value VARCHAR(255)
    ) ENGINE=InnoDB`,
   'ALTER TABLE chat_messages ADD COLUMN is_announcement TINYINT DEFAULT 0',
+  'ALTER TABLE chat_messages ADD COLUMN reply_to INT NULL',
+  'ALTER TABLE chat_messages ADD COLUMN edited_at DATETIME NULL',
+  'ALTER TABLE chat_messages ADD COLUMN attachment_path VARCHAR(255) NULL',
+  'ALTER TABLE chat_messages ADD COLUMN attachment_name VARCHAR(255) NULL',
+  'ALTER TABLE chat_messages ADD COLUMN attachment_type VARCHAR(100) NULL',
+  'ALTER TABLE chat_messages ADD COLUMN attachment_size INT NULL',
   'ALTER TABLE temp_id_requests ADD COLUMN reason VARCHAR(255) NULL',
   'ALTER TABLE users ADD COLUMN token_version INT NOT NULL DEFAULT 0', // bumped on every password change: older logins stop working
   'ALTER TABLE timetable_versions ADD COLUMN file_name VARCHAR(255) NULL',

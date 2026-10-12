@@ -3,7 +3,11 @@ import { useFetch } from '../hooks/useFetch';
 import { downloadFile } from '../services/download';
 import { Async, Stat, Card, Table, Btn, Notice, Badge } from './ui';
 
-const MARKS = { P: { tone: 'green', text: 'P' }, L: { tone: 'amber', text: 'L' }, A: { tone: 'red', text: 'A' } };
+const MARKS = {
+  P: { label: 'Present', symbol: '✓', style: 'border-emerald-200 bg-emerald-50 text-emerald-700' },
+  L: { label: 'Late', symbol: '✓', style: 'border-emerald-200 bg-emerald-50 text-emerald-700' },
+  A: { label: 'Absent', symbol: '✕', style: 'border-rose-200 bg-rose-50 text-rose-700' },
+};
 
 // Weekly attendance sheet for one class: on-screen preview + printable PDF / CSV.
 // basePath "/classrep" = the rep's own class; "/hod" = any class (pass classCode).
@@ -77,11 +81,27 @@ export default function WeeklySheet({ basePath, classCode = '' }) {
                 </Card>
                 <Table rows={d.students} empty="No students in this class." columns={[
                   { key: 'name', label: 'Name' }, { key: 'adm', label: 'Adm no' },
-                  ...d.sessions.map((s, i) => ({ key: `s${s.n}`, label: `S${s.n}`, render: (r) => <Badge tone={MARKS[r.marks[i]].tone}>{MARKS[r.marks[i]].text}</Badge> })),
+                  ...d.sessions.map((s, i) => ({
+                    key: `s${s.n}`,
+                    label: `S${s.n}`,
+                    render: (r) => {
+                      const mark = MARKS[r.marks[i]];
+                      return (
+                        <span
+                          aria-label={mark.label}
+                          title={mark.label}
+                          className={`inline-flex h-8 min-w-8 items-center justify-center rounded-full border px-2 text-base font-black leading-none ${mark.style}`}
+                        >
+                          {mark.symbol}
+                          {r.marks[i] === 'L' && <span className="ml-1 text-[9px] font-bold text-amber-700">L</span>}
+                        </span>
+                      );
+                    },
+                  })),
                   { key: 'present', label: 'Present' }, { key: 'late', label: 'Late' }, { key: 'absent', label: 'Absent' },
                   { key: 'pct', label: 'Week %', render: (r) => `${r.pct}%` },
                 ]} />
-                <p className="text-[11px] text-gray-500">P = present · L = late · A = absent. "Present" counts on-time and late arrivals.</p>
+                <p className="text-[11px] text-gray-500">Green tick = present · green tick with amber L = late · red X = absent. "Present" counts on-time and late arrivals.</p>
               </>
             )}
           </>

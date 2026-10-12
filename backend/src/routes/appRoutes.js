@@ -1,5 +1,5 @@
 import express from 'express';
-import { student, rep, teacher, hod, campus, admin, timetableUpload, sendTimetableFile, MAX_TIMETABLE_BYTES, weeklySheetRep, weeklySheetHod } from '../controllers/appController.js';
+import { student, rep, teacher, hod, campus, admin, timetableUpload, chatAttachmentFile, sendTimetableFile, MAX_TIMETABLE_BYTES, weeklySheetRep, weeklySheetHod } from '../controllers/appController.js';
 
 // Accepts one file of ANY type (see appController). Upload problems come back as JSON, not an HTML error page.
 const MAX_MB = MAX_TIMETABLE_BYTES / 1024 / 1024;
@@ -18,7 +18,10 @@ studentRouter.get('/history', student.history);
 studentRouter.get('/eligibility', student.eligibility);
 studentRouter.get('/leaderboard', student.leaderboard);
 studentRouter.get('/chat', student.chatList);
-studentRouter.post('/chat', student.chatSend);
+studentRouter.post('/chat', chatAttachmentFile, student.chatSend);
+studentRouter.patch('/chat/:id', student.chatEdit);
+studentRouter.delete('/chat/:id', student.chatDelete);
+studentRouter.get('/chat/:id/attachment', student.chatAttachment);
 studentRouter.get('/temp-id', student.tempIdList);
 studentRouter.post('/temp-id', student.tempIdRequest);
 
@@ -37,7 +40,10 @@ classrepRouter.post('/members/:adm/reset-device', rep.memberResetDevice);
 classrepRouter.get('/announcements', rep.announcements);
 classrepRouter.post('/announcements', rep.announce);
 classrepRouter.get('/chat', rep.chatList);
-classrepRouter.post('/chat', rep.chatSend);
+classrepRouter.post('/chat', chatAttachmentFile, rep.chatSend);
+classrepRouter.patch('/chat/:id', rep.chatEdit);
+classrepRouter.delete('/chat/:id', rep.chatDelete);
+classrepRouter.get('/chat/:id/attachment', rep.chatAttachment);
 classrepRouter.get('/timetable', rep.timetable);
 classrepRouter.post('/timetable/upload', timetableFile, rep.timetableUpload);
 classrepRouter.get('/timetable/:id/file', sendTimetableFile);

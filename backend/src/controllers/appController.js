@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import multer from 'multer';
 import pool from '../config/db.js';
-import { TIMETABLE_DIR, UPLOAD_DIR } from '../config/storage.js';
+import { CHAT_ATTACHMENT_DIR, TIMETABLE_DIR, UPLOAD_DIR } from '../config/storage.js';
 import { q, one, exec, sqlDate, startOfToday, asDate, nairobiDate, NAIROBI_OFFSET_MS, fmtDate, fmtTime, pct1, ATTENDANCE_THRESHOLD } from '../utils/dbHelpers.js';
 import { awardBadges, POINTS_LATE, POINTS_ON_TIME, recomputeAttendance, recomputeClassAttendance } from './attendanceController.js';
 import { sendEmail, emailTemplates, emailSettings, isEmailConfigured, missingEmailSettings, describeEmailError } from '../config/email.js';
@@ -40,6 +40,53 @@ export const timetableUpload = multer({
     filename: (req, file, cb) => { const ext = safeExt(file.originalname); cb(null, `${crypto.randomUUID()}${ext ? `.${ext}` : ''}`); },
   }),
   limits: { fileSize: MAX_TIMETABLE_BYTES, files: 1 },
+});
+
+const CHAT_ATTACHMENT_TYPES = {
+  'image/jpeg': ['.jpg', '.jpeg'],
+  'image/png': ['.png'],
+  'image/webp': ['.webp'],
+  'image/gif': ['.gif'],
+  'video/mp4': ['.mp4'],
+  'video/webm': ['.webm'],
+  'video/quicktime': ['.mov'],
+  'application/pdf': ['.pdf'],
+  'text/plain': ['.txt'],
+  'application/msword': ['.doc'],
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
+  'application/vnd.ms-excel': ['.xls'],
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
+  'application/vnd.ms-powerpoint': ['.ppt'],
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': ['.pptx'],
+};
+const CHAT_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
+export const chatAttachmentUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      try {
+        fs.mkdirSync(CHAT_ATTACHMENT_DIR, { recursive: true });
+        cb(null, CHAT_ATTACHMENT_DIR);
+      } catch (err) { cb(err); }
+    },
+    filename: (req, file, cb) => {
+      const extensions = CHAT_ATTACHMENT_TYPES[file.mimetype];
+      const ext = path.extname(file.originalname).toLowerCase();
+      if (!extensions?.includes(ext)) return cb(new Error('That file type is not supported.'));
+      cb(null, `${crypto.randomUUID()}${ext}`);
+    },
+  }),
+  fileFilter: (req, file, cb) => {
+    if (!CHAT_ATTACHMENT_TYPES[file.mimetype]) return cb(new Error('Send a photo, video, or supported document.'));
+    cb(null, true);
+  },
+  limits: { fileSize: CHAT_ATTACHMENT_MAX_BYTES, files: 1 },
+});
+export const chatAttachmentFile = (req, res, next) => chatAttachmentUpload.single('attachment')(req, res, (err) => {
+  if (!err) return next();
+  const tooBig = err.code === 'LIMIT_FILE_SIZE';
+  return res.status(tooBig ? 413 : 400).json({
+    error: tooBig ? 'Attachments must be 25 MB or smaller.' : err.message || 'Could not upload this attachment.',
+  });
 });
 
 // GET .../:id/file  (rep: own class only; HOD/admin: any)   ?download=1 forces a download
@@ -107,22 +154,85 @@ const chatTimestamp = (value) => {
   const timestamp = new Date(normalized);
   return Number.isNaN(timestamp.getTime()) ? null : timestamp.toISOString();
 };
+const chatMessageOut = (m, req) => ({
+  id: m.id, text: m.message, timestamp: chatTimestamp(m.created_at),
+  time: fmtTime(m.created_at), date: fmtDate(m.created_at),
+  sender: m.name, sender_id: m.sender_id, announcement: !!m.is_announcement,
+  edited: !!m.edited_at,
+  reply: m.reply_to ? { id: m.reply_to, text: m.reply_message || '', sender: m.reply_sender || 'Message' } : null,
+  attachment: m.attachment_path ? {
+    url: `${req.baseUrl.replace(/^\/api/, '')}/chat/${m.id}/attachment`,
+    name: m.attachment_name,
+    type: m.attachment_type,
+    size: Number(m.attachment_size),
+  } : null,
+});
 const announcementOut = (m) => ({
   id: m.id, text: m.message, timestamp: chatTimestamp(m.created_at),
   time: fmtTime(m.created_at), date: fmtDate(m.created_at),
   sender: m.name, sender_id: m.sender_id, announcement: !!m.is_announcement,
 });
+const discardChatUpload = async (req) => {
+  if (!req.file) return;
+  try { await fs.promises.unlink(path.join(CHAT_ATTACHMENT_DIR, path.basename(req.file.filename))); }
+  catch (err) { if (err.code !== 'ENOENT') console.error('Failed to remove rejected chat attachment:', err); }
+};
 
 async function postChat(req, res, announcement) {
-  const message = String(req.body.message || '').trim();
-  if (!message) return bad(res, 'Message cannot be empty.');
+  const message = typeof req.body.message === 'string' ? req.body.message.trim() : '';
+  if (!message && !req.file) return bad(res, 'Write a message or attach a file.');
+  if (message.length > 2000) {
+    await discardChatUpload(req);
+    return bad(res, 'Messages must be 2,000 characters or fewer.');
+  }
   const cc = classOf(req);
-  if (!cc) return bad(res, 'Your account has no class.');
-  const r = await exec('INSERT INTO chat_messages (class_code, sender_id, message, is_announcement) VALUES (?, ?, ?, ?)', [cc, req.user.id, message, announcement ? 1 : 0]);
-  const row = await one('SELECT m.*, u.name FROM chat_messages m JOIN users u ON u.id = m.sender_id WHERE m.id = ?', [r.insertId]);
-  const out = announcementOut(row);
-  req.app.get('io')?.to(cc).emit('receive_message', { ...out, class_code: cc });
-  res.status(201).json({ ...out, mine: true });
+  if (!cc) {
+    await discardChatUpload(req);
+    return bad(res, 'Your account has no class.');
+  }
+  if (announcement && req.file) {
+    await discardChatUpload(req);
+    return bad(res, 'Announcements cannot have attachments.');
+  }
+  const replyId = req.body.reply_to ? Number(req.body.reply_to) : null;
+  if (replyId !== null && (!Number.isInteger(replyId) || replyId < 1)) {
+    await discardChatUpload(req);
+    return bad(res, 'Invalid reply target.');
+  }
+  if (replyId !== null) {
+    let reply;
+    try { reply = await one('SELECT id FROM chat_messages WHERE id = ? AND class_code = ?', [replyId, cc]); }
+    catch (err) { await discardChatUpload(req); throw err; }
+    if (!reply) {
+      await discardChatUpload(req);
+      return bad(res, 'The message you are replying to is not in this class.', 404);
+    }
+  }
+  let insertedId;
+  try {
+    const r = await exec(
+      `INSERT INTO chat_messages (class_code, sender_id, message, is_announcement, reply_to, attachment_path, attachment_name, attachment_type, attachment_size)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [cc, req.user.id, message, announcement ? 1 : 0, replyId, req.file?.filename || null,
+        req.file ? cleanName(req.file.originalname) : null, req.file?.mimetype || null, req.file?.size || null]);
+    insertedId = r.insertId;
+    const row = await one(
+      `SELECT m.*, u.name, parent.message AS reply_message, reply_user.name AS reply_sender
+       FROM chat_messages m JOIN users u ON u.id = m.sender_id
+       LEFT JOIN chat_messages parent ON parent.id = m.reply_to
+       LEFT JOIN users reply_user ON reply_user.id = parent.sender_id
+       WHERE m.id = ?`, [r.insertId]);
+    const out = chatMessageOut(row, req);
+    req.app.get('io')?.to(cc).emit('receive_message', { ...out, class_code: cc });
+    res.status(201).json({ ...out, mine: true });
+  } catch (err) {
+    if (insertedId) {
+      try { await exec('DELETE FROM chat_messages WHERE id = ? AND sender_id = ?', [insertedId, req.user.id]); }
+      catch (cleanupError) { console.error('Failed to remove incomplete chat message:', cleanupError); }
+    }
+    await discardChatUpload(req);
+    throw err;
+  }
 }
 
 // =========================================================================================
@@ -192,10 +302,67 @@ export const student = {
 
   chatList: wrap(async (req, res) => {
     const cc = classOf(req);
-    const rows = await q('SELECT m.*, u.name FROM chat_messages m JOIN users u ON u.id = m.sender_id WHERE m.class_code = ? ORDER BY m.id DESC LIMIT 100', [cc]);
-    res.json(rows.reverse().map((m) => ({ ...announcementOut(m), mine: m.sender_id === req.user.id })));
+    const rows = await q(
+      `SELECT m.*, u.name, parent.message AS reply_message, reply_user.name AS reply_sender
+       FROM chat_messages m JOIN users u ON u.id = m.sender_id
+       LEFT JOIN chat_messages parent ON parent.id = m.reply_to
+       LEFT JOIN users reply_user ON reply_user.id = parent.sender_id
+       WHERE m.class_code = ? ORDER BY m.id DESC LIMIT 100`, [cc]);
+    res.json(rows.reverse().map((m) => ({ ...chatMessageOut(m, req), mine: m.sender_id === req.user.id })));
   }),
   chatSend: wrap((req, res) => postChat(req, res, false)),
+  chatEdit: wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    const message = typeof req.body.message === 'string' ? req.body.message.trim() : '';
+    if (!Number.isInteger(id) || id < 1) return bad(res, 'Invalid message ID.');
+    if (!message || message.length > 2000) return bad(res, 'Message is required and must be 2,000 characters or fewer.');
+    const row = await one('SELECT id, class_code, sender_id, is_announcement FROM chat_messages WHERE id = ?', [id]);
+    if (!row) return bad(res, 'Message not found.', 404);
+    if (['student', 'student_rep'].includes(req.user.role) && row.class_code !== req.user.class_code) return bad(res, 'That message is not in your class.', 403);
+    if (Number(row.sender_id) !== Number(req.user.id) || row.is_announcement) return bad(res, 'You can only edit your own chat messages.', 403);
+    await exec('UPDATE chat_messages SET message = ?, edited_at = ? WHERE id = ?', [message, sqlDate(), id]);
+    const updated = await one(
+      `SELECT m.*, u.name, parent.message AS reply_message, reply_user.name AS reply_sender
+       FROM chat_messages m JOIN users u ON u.id = m.sender_id
+       LEFT JOIN chat_messages parent ON parent.id = m.reply_to
+       LEFT JOIN users reply_user ON reply_user.id = parent.sender_id WHERE m.id = ?`, [id]);
+    const out = { ...chatMessageOut(updated, req), mine: true };
+    req.app.get('io')?.to(row.class_code).emit('message_updated', { ...out, class_code: row.class_code });
+    res.json(out);
+  }),
+  chatDelete: wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id < 1) return bad(res, 'Invalid message ID.');
+    const row = await one('SELECT id, class_code, sender_id, is_announcement, attachment_path FROM chat_messages WHERE id = ?', [id]);
+    if (!row) return bad(res, 'Message not found.', 404);
+    if (['student', 'student_rep'].includes(req.user.role) && row.class_code !== req.user.class_code) return bad(res, 'That message is not in your class.', 403);
+    if (Number(row.sender_id) !== Number(req.user.id) || row.is_announcement) return bad(res, 'You can only delete your own chat messages.', 403);
+    await exec('UPDATE chat_messages SET reply_to = NULL WHERE reply_to = ?', [id]);
+    await exec('DELETE FROM chat_messages WHERE id = ?', [id]);
+    if (row.attachment_path) {
+      try { await fs.promises.unlink(path.join(CHAT_ATTACHMENT_DIR, path.basename(row.attachment_path))); }
+      catch (err) { if (err.code !== 'ENOENT') console.error('Failed to remove deleted chat attachment:', err); }
+    }
+    req.app.get('io')?.to(row.class_code).emit('message_deleted', { id, class_code: row.class_code });
+    res.json({ message: 'Message deleted.' });
+  }),
+  chatAttachment: wrap(async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id < 1) return bad(res, 'Invalid message ID.');
+    const row = await one('SELECT class_code, attachment_path, attachment_name, attachment_type FROM chat_messages WHERE id = ?', [id]);
+    if (!row || !row.attachment_path) return bad(res, 'Attachment not found.', 404);
+    if (['student', 'student_rep'].includes(req.user.role) && row.class_code !== req.user.class_code) return bad(res, 'That attachment is not in your class.', 403);
+    const fullPath = path.join(CHAT_ATTACHMENT_DIR, path.basename(row.attachment_path));
+    if (!fs.existsSync(fullPath)) return bad(res, 'The stored attachment is missing from the server.', 404);
+    const type = CHAT_ATTACHMENT_TYPES[row.attachment_type] ? row.attachment_type : 'application/octet-stream';
+    const inline = type.startsWith('image/') || type.startsWith('video/') || type === 'application/pdf';
+    const filename = cleanName(row.attachment_name);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Type', type);
+    res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename="${filename.replace(/[^\x20-\x7e]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
+    res.setHeader('Content-Length', fs.statSync(fullPath).size);
+    res.sendFile(fullPath);
+  }),
 
   tempIdList: wrap(async (req, res) => {
     const adm = await admOf(req);
@@ -396,6 +563,9 @@ export const rep = {
   announce: wrap((req, res) => postChat(req, res, true)),
   chatList: student.chatList,
   chatSend: student.chatSend,
+  chatEdit: student.chatEdit,
+  chatDelete: student.chatDelete,
+  chatAttachment: student.chatAttachment,
 
   timetable: wrap(async (req, res) => {
     const v = await one('SELECT * FROM timetable_versions WHERE class_code = ? ORDER BY id DESC LIMIT 1', [classOf(req)]);
