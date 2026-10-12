@@ -1325,8 +1325,8 @@ async function buildWeeklySheet(cc, week) {
   };
 }
 
-// Draws the official register (landscape A4): logo + header fields, the 5-day x 4-slot grid, a tick for present,
-// a cross for absent, blank where no lesson was held, then TEACHER'S SIGN and H.O.D'S COMMENTS.
+// Draws the official register (landscape A4): green ticks for present, red crosses for absent, and blanks
+// where no lesson was held, followed by TEACHER'S SIGN and H.O.D'S COMMENTS.
 function sendRegisterPdf(res, sh, filename) {
   const doc = new PDFDocument({ autoFirstPage: false, size: 'A4', layout: 'landscape', margin: 0 });
   res.setHeader('Content-Type', 'application/pdf');
@@ -1347,8 +1347,8 @@ function sendRegisterPdf(res, sh, filename) {
     const th = doc.heightOfString(text, { width: w - 3, align });
     doc.text(text, x + 1.5, y + Math.max(1, (h - th) / 2), { width: w - 3, height: h, align, ellipsis: true });
   };
-  const tick = (cx, cy, scale = 1) => doc.save().lineWidth(1.3 * scale).lineCap('round').lineJoin('round').strokeColor(BLACK).moveTo(cx - 4.5 * scale, cy + 0.5 * scale).lineTo(cx - 1.5 * scale, cy + 3.8 * scale).lineTo(cx + 5 * scale, cy - 3.8 * scale).stroke().restore();
-  const cross = (cx, cy, scale = 1) => doc.save().lineWidth(1.1 * scale).lineCap('round').strokeColor(BLACK).moveTo(cx - 3.5 * scale, cy - 3.5 * scale).lineTo(cx + 3.5 * scale, cy + 3.5 * scale).moveTo(cx + 3.5 * scale, cy - 3.5 * scale).lineTo(cx - 3.5 * scale, cy + 3.5 * scale).stroke().restore();
+  const tick = (cx, cy, scale = 1) => doc.save().lineWidth(1.3 * scale).lineCap('round').lineJoin('round').strokeColor('#15803d').moveTo(cx - 4.5 * scale, cy + 0.5 * scale).lineTo(cx - 1.5 * scale, cy + 3.8 * scale).lineTo(cx + 5 * scale, cy - 3.8 * scale).stroke().restore();
+  const cross = (cx, cy, scale = 1) => doc.save().lineWidth(1.1 * scale).lineCap('round').strokeColor('#dc2626').moveTo(cx - 3.5 * scale, cy - 3.5 * scale).lineTo(cx + 3.5 * scale, cy + 3.5 * scale).moveTo(cx + 3.5 * scale, cy - 3.5 * scale).lineTo(cx - 3.5 * scale, cy + 3.5 * scale).stroke().restore();
   const field = (name, value, x, y, w) => { // "NAME: ______value______" like the printed form
     doc.font('Helvetica-Bold').fontSize(8.5).fillColor(BLACK);
     const lw = doc.widthOfString(name) + 4;

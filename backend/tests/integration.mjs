@@ -1,5 +1,6 @@
 // Integration test: boots the REAL Express app on an in-memory SQLite database (see tests/run.sh)
 import path from 'node:path';
+import { inflateSync } from 'node:zlib';
 process.env.PORT = '5055'; process.env.CAMPUS_LAT = '-1.123'; process.env.CAMPUS_LNG = '37.123';
 const log = console.log; console.log = () => {}; // silence server chatter
 await import('./src/server.js');
@@ -704,6 +705,18 @@ ok('signing a lesson also records the time out', (await pool.query('SELECT ended
 // the PDF itself
 const regPdf = await api('GET', '/hod/weekly-sheet?class_code=REG1%2FS%2F26&format=pdf', { token: hod, raw: true });
 ok('register PDF is a landscape PDF with the logo image embedded', regPdf.status === 200 && regPdf.buf.slice(0, 4).toString() === '%PDF' && /\/Subtype \/Image/.test(regPdf.buf.toString('latin1')) && /MediaBox \[0 0 841\.89 595\.28\]/.test(regPdf.buf.toString('latin1')));
+const pdfContent = [];
+const pdfLatin1 = regPdf.buf.toString('latin1');
+for (const match of pdfLatin1.matchAll(/stream\r?\n/g)) {
+  const start = match.index + match[0].length;
+  const end = pdfLatin1.indexOf('\nendstream', start);
+  if (end < 0) continue;
+  const stream = Buffer.from(pdfLatin1.slice(start, end).replace(/\r$/, ''), 'latin1');
+  try { pdfContent.push(inflateSync(stream).toString('latin1')); } catch { /* Non-Flate PDF streams are not page content. */ }
+}
+const strokeColors = [...pdfContent.join('\n').matchAll(/([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+SCN/g)].map(([, r, g, b]) => [Number(r), Number(g), Number(b)]);
+ok('register PDF uses green strokes for present marks', strokeColors.some(([r, g, b]) => g > r * 3 && g > b * 1.5));
+ok('register PDF uses red strokes for absent marks', strokeColors.some(([r, g, b]) => r > g * 3 && r > b * 2));
 const pt = spawnSync('pdftotext', ['-layout', '-', '-'], { input: regPdf.buf, encoding: 'utf8' });
 if (pt.status === 0) {
   const txt = pt.stdout;
