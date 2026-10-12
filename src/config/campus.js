@@ -24,7 +24,7 @@ export const SOCKET_URL = (() => {
 export const CAMPUS = {
   latitude: num(import.meta.env.VITE_CAMPUS_LAT, -0.0663),
   longitude: num(import.meta.env.VITE_CAMPUS_LNG, 37.6642),
-  radiusMeters: num(import.meta.env.VITE_CAMPUS_RADIUS_M, 200),
+  radiusMeters: num(import.meta.env.VITE_CAMPUS_RADIUS_M, 10000),
 };
 
 export const STORAGE_KEYS = {

@@ -4,7 +4,7 @@ const num = (v, d) => { const n = parseFloat(v); return Number.isFinite(n) ? n :
 export const MTTI_COORDINATES = {
   latitude: num(process.env.CAMPUS_LAT, -0.0663),
   longitude: num(process.env.CAMPUS_LNG, 37.6642),
-  radiusMeters: num(process.env.CAMPUS_RADIUS_M, 200),
+  radiusMeters: num(process.env.CAMPUS_RADIUS_M, 10000),
 };
 
 export const QR_SCAN_RADIUS_METERS = 20;
