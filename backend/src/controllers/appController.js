@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import multer from 'multer';
 import pool from '../config/db.js';
 import { TIMETABLE_DIR, UPLOAD_DIR } from '../config/storage.js';
-import { q, one, exec, sqlDate, startOfToday, asDate, fmtDate, fmtTime, pct1, ATTENDANCE_THRESHOLD } from '../utils/dbHelpers.js';
+import { q, one, exec, sqlDate, startOfToday, asDate, nairobiDate, NAIROBI_OFFSET_MS, fmtDate, fmtTime, pct1, ATTENDANCE_THRESHOLD } from '../utils/dbHelpers.js';
 import { awardBadges, POINTS_LATE, POINTS_ON_TIME, recomputeAttendance, recomputeClassAttendance } from './attendanceController.js';
 import { sendEmail, emailTemplates, emailSettings, isEmailConfigured, missingEmailSettings, describeEmailError } from '../config/email.js';
 import { allow } from '../utils/rateLimit.js';
@@ -231,7 +231,7 @@ export const rep = {
       'INSERT INTO sessions (class_code, unit_name, lecturer_name, start_time, end_time, late_threshold_mins, is_active, venue) VALUES (?, ?, ?, ?, ?, ?, 1, ?)',
       [cc, unit_name.trim(), lecturer_name.trim(), sqlDate(startedAt), sqlDate(new Date(startedAt.getTime() + 3 * 3600 * 1000)), Number(late_threshold_mins) || 15, venue || null]);
     await recomputeClassAttendance(cc); // a new session lowers the % of everyone who hasn't attended yet
-    res.status(201).json({ id: r.insertId, class_code: cc, unit_name: unit_name.trim(), lecturer_name: lecturer_name.trim(), venue: venue || null });
+    res.status(201).json({ id: r.insertId, class_code: cc, unit_name: unit_name.trim(), lecturer_name: lecturer_name.trim(), venue: venue || null, startedAt: fmtTime(startedAt) });
   }),
   sessionCurrent: wrap(async (req, res) => {
     const s = await one('SELECT * FROM sessions WHERE class_code = ? AND is_active = 1 ORDER BY id DESC LIMIT 1', [classOf(req)]);
@@ -826,27 +826,59 @@ export const admin = {
   classMemberUpdate: wrap(async (req, res) => {
     const code = String(req.body.code || '').trim();
     const userId = Number(req.body.user_id);
+    const updateAdmNo = req.body.adm_no !== undefined;
+    const admNo = updateAdmNo && typeof req.body.adm_no === 'string' ? req.body.adm_no.trim() : undefined;
     const name = String(req.body.name || '').trim();
     const email = String(req.body.email || '').trim().toLowerCase();
     const parentEmail = String(req.body.parent_email || '').trim().toLowerCase();
     const parentPhone = String(req.body.parent_phone || '').trim();
     if (!code || !Number.isInteger(userId) || userId < 1) return bad(res, 'A class code and valid user ID are required.');
+    if (updateAdmNo && (!admNo || admNo.length > 50)) return bad(res, 'Admission number is required and must be 50 characters or fewer.');
     if (!name || name.length > 150) return bad(res, 'Name is required and must be 150 characters or fewer.');
     if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return bad(res, 'Enter a valid email address.');
     if (parentEmail && (parentEmail.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(parentEmail))) return bad(res, 'Enter a valid parent email address or leave it blank.');
     if (parentPhone.length > 50) return bad(res, 'Parent phone must be 50 characters or fewer.');
-    const member = await one("SELECT id FROM users WHERE id = ? AND class_code = ? AND role IN ('student', 'student_rep')", [userId, code]);
-    if (!member) return bad(res, 'Member not found in this class.', 404);
     if (await one('SELECT id FROM users WHERE email = ? AND id <> ?', [email, userId])) return bad(res, 'An account with this email already exists.', 409);
 
     const connection = await pool.getConnection();
     try {
       await connection.beginTransaction();
-      await connection.query('UPDATE users SET name = ?, email = ? WHERE id = ?', [name, email, userId]);
+      const [members] = await connection.query(
+        "SELECT u.id, s.adm_no FROM users u LEFT JOIN students s ON s.user_id = u.id WHERE u.id = ? AND u.class_code = ? AND u.role IN ('student', 'student_rep') FOR UPDATE",
+        [userId, code]);
+      const member = members[0];
+      if (!member) {
+        await connection.rollback();
+        return bad(res, 'Member not found in this class.', 404);
+      }
+      if (updateAdmNo && !member.adm_no) {
+        await connection.rollback();
+        return bad(res, 'This account has no linked student admission record.', 409);
+      }
+      const [duplicates] = updateAdmNo ? await connection.query(
+        'SELECT user_id FROM students WHERE LOWER(TRIM(adm_no)) = LOWER(?) AND user_id <> ?',
+        [admNo, userId]) : [[]];
+      if (duplicates.length) {
+        await connection.rollback();
+        return bad(res, 'A student with this admission number already exists.', 409);
+      }
+      const admissionChanged = updateAdmNo && admNo !== member.adm_no;
+      await connection.query(
+        'UPDATE users SET name = ?, email = ?, token_version = token_version + ? WHERE id = ?',
+        [name, email, admissionChanged ? 1 : 0, userId]);
       await connection.query('UPDATE students SET parent_email = ?, parent_phone = ? WHERE user_id = ?', [parentEmail, parentPhone, userId]);
+      if (admissionChanged) {
+        await connection.query('UPDATE students SET adm_no = ? WHERE user_id = ?', [admNo, userId]);
+        for (const table of ['attendance_logs', 'device_locks', 'parent_alerts', 'points_logs', 'badges', 'temp_id_requests', 'campus_checkins', 'fee_accounts']) {
+          await connection.query(`UPDATE ${table} SET adm_no = ? WHERE adm_no = ?`, [admNo, member.adm_no]);
+        }
+      }
       await connection.commit();
     } catch (err) {
       await connection.rollback();
+      if (err.code === 'ER_DUP_ENTRY' || String(err.code || '').startsWith('SQLITE_CONSTRAINT')) {
+        return bad(res, 'This admission number conflicts with existing student records.', 409);
+      }
       throw err;
     } finally {
       connection.release();
@@ -986,18 +1018,18 @@ export const admin = {
 // =========================================================================================
 const DAY3 = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MON3 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const dayLabel = (d) => `${DAY3[d.getDay()]} ${String(d.getDate()).padStart(2, '0')} ${MON3[d.getMonth()]}`;
+const dayLabel = (d) => `${DAY3[d.getUTCDay()]} ${String(d.getUTCDate()).padStart(2, '0')} ${MON3[d.getUTCMonth()]}`;
 const isoDay = (d) => sqlDate(d).slice(0, 10);
 
 // Monday 00:00 of the week containing `week` (YYYY-MM-DD, default today) .. the following Monday
 function weekBounds(week) {
   if (week && !/^\d{4}-\d{2}-\d{2}$/.test(week)) return null;
-  const base = week ? new Date(`${week}T00:00:00`) : new Date();
+  const base = week ? new Date(`${week}T00:00:00Z`) : nairobiDate(new Date());
   if (Number.isNaN(base.getTime())) return null;
-  base.setHours(0, 0, 0, 0);
-  const mon = new Date(base); mon.setDate(base.getDate() - ((base.getDay() + 6) % 7));
-  const next = new Date(mon); next.setDate(mon.getDate() + 7);
-  const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
+  base.setUTCHours(0, 0, 0, 0);
+  const mon = new Date(base); mon.setUTCDate(base.getUTCDate() - ((base.getUTCDay() + 6) % 7));
+  const next = new Date(mon); next.setUTCDate(mon.getUTCDate() + 7);
+  const sun = new Date(mon); sun.setUTCDate(mon.getUTCDate() + 6);
   return { mon, next, sun };
 }
 
@@ -1010,10 +1042,10 @@ const SLOTS = [
 ];
 // A lesson belongs to the slot whose start is the latest one at most 30 minutes after the lesson began
 // (reps start the QR a little early or late). Before 7:30 it counts as the first slot, after 3:05 pm the last.
-const slotIndex = (d) => { const t = d.getHours() * 60 + d.getMinutes(); let k = 0; SLOTS.forEach((s, i) => { if (t >= s.start - 30) k = i; }); return k; };
-const hhmm = (v) => { const d = asDate(v); return Number.isNaN(d.getTime()) ? null : `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; }; // null (printed blank) for a missing/garbled time
-const hhmmSeconds = (v) => { const d = asDate(v); return Number.isNaN(d.getTime()) ? null : `${hhmm(v)}:${String(d.getSeconds()).padStart(2, '0')}`; };
-const shortDate = (d) => `${d.getDate()} ${MON3[d.getMonth()]}`;
+const slotIndex = (d) => { const t = d.getUTCHours() * 60 + d.getUTCMinutes(); let k = 0; SLOTS.forEach((s, i) => { if (t >= s.start - 30) k = i; }); return k; };
+const hhmm = (v) => { const d = nairobiDate(v); return Number.isNaN(d.getTime()) ? null : `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`; }; // null (printed blank) for a missing/garbled time
+const hhmmSeconds = (v) => { const d = nairobiDate(v); return Number.isNaN(d.getTime()) ? null : `${hhmm(v)}:${String(d.getUTCSeconds()).padStart(2, '0')}`; };
+const shortDate = (d) => `${d.getUTCDate()} ${MON3[d.getUTCMonth()]}`;
 const FORM_NO = 'MTTI/REG/CUR/01';
 const DAY_NAMES = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY'];
 const LOGO_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../assets/mtti-logo.png');
@@ -1028,7 +1060,7 @@ async function buildWeeklySheet(cc, week) {
   const cls = await one(`SELECT c.course, c.module, c.department, teacher.name AS class_teacher
     FROM classes c LEFT JOIN users teacher ON teacher.id = c.class_teacher_id AND teacher.role = 'teacher'
     WHERE c.class_code = ?`, [cc]);
-  const sessions = await q('SELECT * FROM sessions WHERE class_code = ? AND start_time >= ? AND start_time < ? ORDER BY start_time, id', [cc, sqlDate(b.mon), sqlDate(b.next)]);
+  const sessions = await q('SELECT * FROM sessions WHERE class_code = ? AND start_time >= ? AND start_time < ? ORDER BY start_time, id', [cc, sqlDate(new Date(b.mon.getTime() - NAIROBI_OFFSET_MS)), sqlDate(new Date(b.next.getTime() - NAIROBI_OFFSET_MS))]);
   const roster = await classStudents(cc);
   const marks = new Map(); // `${session}|${adm}` -> 'P' | 'L'
   if (sessions.length) {
@@ -1058,7 +1090,7 @@ async function buildWeeklySheet(cc, week) {
   const subjectsBySlot = new Map();
   const classCells = new Map();
   for (const s of sessions) {
-    const st = asDate(s.start_time), day = (st.getDay() + 6) % 7;
+    const st = nairobiDate(s.start_time), day = (st.getUTCDay() + 6) % 7;
     if (day > 4) continue;
     const key = day * 4 + slotIndex(st);
     const subjectsAtSlot = subjectsBySlot.get(key) || new Set();
@@ -1076,7 +1108,7 @@ async function buildWeeklySheet(cc, week) {
   const subjects = [...groups.values()].map((g) => {
     const cells = new Map();
     for (const s of g.list) {
-      const st = asDate(s.start_time), day = (st.getDay() + 6) % 7;
+      const st = nairobiDate(s.start_time), day = (st.getUTCDay() + 6) % 7;
       if (day > 4) { weekendSkipped++; continue; } // the register has Monday-Friday columns only
       const slot = slotIndex(st), key = day * 4 + slot;
       const c = cells.get(key) || { day, slot, ids: [], timeIn: null, timeOut: null, signed: true, allEnded: true };
@@ -1109,7 +1141,7 @@ async function buildWeeklySheet(cc, week) {
     })),
   };
 
-  const friday = new Date(b.mon); friday.setDate(b.mon.getDate() + 4);
+  const friday = new Date(b.mon); friday.setUTCDate(b.mon.getUTCDate() + 4);
   return {
     classCode: cc, course: cls ? `${cls.course} · ${cls.module}` : '', department: cls?.department || '',
     classTeacher: cls?.class_teacher || '',
@@ -1117,7 +1149,7 @@ async function buildWeeklySheet(cc, week) {
     classRegister,
     weekStart: isoDay(b.mon), weekEnd: isoDay(b.sun), weekLabel: `${dayLabel(b.mon)} - ${dayLabel(b.sun)} ${b.sun.getFullYear()}`,
     weekNumber, dateFrom: shortDate(b.mon), dateTo: shortDate(friday), year: b.mon.getFullYear(), weekendSkipped,
-    sessions: sessions.map((s, i) => ({ n: i + 1, id: s.id, label: `${dayLabel(asDate(s.start_time))} ${fmtTime(s.start_time)}`, unit: s.unit_name, lecturer: s.lecturer_name, signed: !!s.signed_at })),
+    sessions: sessions.map((s, i) => ({ n: i + 1, id: s.id, label: `${dayLabel(nairobiDate(s.start_time))} ${fmtTime(s.start_time)}`, unit: s.unit_name, lecturer: s.lecturer_name, signed: !!s.signed_at })),
     students, subjects,
     totals: { students: students.length, sessions: sessions.length, presentStudents: students.filter((s) => s.present > 0).length, perfect: sessions.length ? students.filter((s) => s.absent === 0).length : 0 },
   };
@@ -1273,7 +1305,7 @@ export const notifications = wrap(async (req, res) => {
   const role = req.user.role, items = [];
   const add = (id, kind, icon, title, text, link, when) => items.push({ id, kind, icon, title, text, link, when: when ? `${fmtDate(when)} ${fmtTime(when)}` : null });
   const count = async (sql, params = []) => (await one(sql, params)).n;
-  const weekend = (() => { const d = new Date().getDay(); return d === 5 || d === 6 || d === 0; })(); // Friday to Sunday
+  const weekend = (() => { const d = nairobiDate(new Date()).getUTCDay(); return d === 5 || d === 6 || d === 0; })(); // Friday to Sunday
 
   if (role === 'student' || role === 'student_rep') {
     const st = await me(req);

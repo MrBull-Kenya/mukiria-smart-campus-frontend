@@ -87,6 +87,10 @@ ok('lecturer list', lects.data?.some(l => l.name === 'Mr Teacher'));
 const sess = await api('POST', '/classrep/sessions', { token: repT, body: { unit_name: 'Networking', lecturer_name: 'Mr Teacher', venue: 'Lab 1' } });
 ok('start session', sess.status === 201 && sess.data.id > 0);
 const sid = sess.data.id;
+const startedSession = (await api('GET', '/classrep/sessions/current', { token: repT })).data.session;
+const storedStart = (await pool.query('SELECT start_time FROM sessions WHERE id = ?', [sid]))[0][0].start_time;
+const expectedStartedAt = new Intl.DateTimeFormat('en-US', { timeZone: 'Africa/Nairobi', hour: '2-digit', minute: '2-digit', hour12: true }).format(new Date(`${String(storedStart).replace(' ', 'T')}Z`));
+ok('class rep session start time is shown in Kenya local time', startedSession.startedAt === expectedStartedAt);
 ok('manual attendance is restricted to class reps', (await api('GET', '/classrep/manual-attendance', { token: s1 })).status === 403 && (await api('POST', '/classrep/manual-attendance', { token: s1, body: { adm_no: '1003' } })).status === 403);
 const manualList = await api('GET', '/classrep/manual-attendance', { token: repT });
 const carolBeforeManual = (await pool.query("SELECT points, attendance_pct FROM students WHERE adm_no = '1003'"))[0][0];
@@ -356,11 +360,38 @@ ok('missing course rejected', (await addCls({ class_code: 'ABC1', module: 'y' })
 const cls = await api('GET', '/admin/classes', { token: adminTok });
 ok('class list with member counts + rep', cls.data?.find((c) => c.code === 'ITECH6')?.students === 5 && cls.data.find((c) => c.code === 'ITECH6').rep === 'Rita Rep' && cls.data.find((c) => c.code === 'ITECH9/S/26')?.students === 0, JSON.stringify(cls.data));
 const adminMembersPath = `/admin/class-members?code=${encodeURIComponent('ITECH6')}`;
+const hodMembersPath = `/hod/class-members?code=${encodeURIComponent('ITECH6')}`;
 ok('class member list is administrator-only', (await api('GET', adminMembersPath, { token: hod })).status === 403 && (await api('GET', adminMembersPath)).status === 401);
 const adminMembers = await api('GET', adminMembersPath, { token: adminTok });
 ok('administrator sees class students and rep with account status', adminMembers.status === 200 && adminMembers.data.length === 5 && adminMembers.data.some((m) => m.role === 'student_rep' && m.status === 'active') && adminMembers.data.every((m) => Number.isInteger(m.id)), JSON.stringify(adminMembers.data));
+ok('HOD can view class members from the HOD classes page', (await api('GET', hodMembersPath, { token: hod })).status === 200);
 const updateTarget = adminMembers.data.find((m) => m.adm_no === '1002');
 ok('only administrator may edit class-member details', (await api('PUT', '/admin/class-members', { token: hod, body: { code: 'ITECH6', user_id: updateTarget.id, name: 'Blocked', email: 'blocked@mtti.ac.ke' } })).status === 403);
+ok('admission number update rejects blank values', (await api('PUT', '/hod/class-members', { token: hod, body: { code: 'ITECH6', user_id: updateTarget.id, adm_no: '  ', name: 'Brian', email: '1002@mtti.ac.ke' } })).status === 400);
+ok('admission number update rejects case-insensitive duplicates', (await api('PUT', '/hod/class-members', { token: hod, body: { code: 'ITECH6', user_id: updateTarget.id, adm_no: ' 1001 ', name: 'Brian', email: '1002@mtti.ac.ke' } })).status === 409);
+const addedAdmissionAttendance = !(await pool.query('SELECT id FROM attendance_logs WHERE session_id = ? AND adm_no = ?', [sid, '1002']))[0].length;
+if (addedAdmissionAttendance) {
+  await pool.query('INSERT INTO attendance_logs (session_id, adm_no) VALUES (?, ?)', [sid, '1002']);
+}
+await pool.query('INSERT INTO parent_alerts (adm_no, parent_email, alert_reason) VALUES (?, ?, ?)', ['1002', 'parent.1002@example.com', 'admission-update-test']);
+await pool.query('INSERT INTO points_logs (adm_no, points, activity_type) VALUES (?, ?, ?)', ['1002', 1, 'admission-update-test']);
+await pool.query('INSERT INTO badges (adm_no, badge_name) VALUES (?, ?)', ['1002', 'Admission update test']);
+await pool.query('INSERT INTO temp_id_requests (adm_no, face_score, expires_at) VALUES (?, ?, ?)', ['1002', 0, '2030-01-01 00:00:00']);
+await pool.query('INSERT INTO campus_checkins (adm_no, service_type) VALUES (?, ?)', ['1002', 'library']);
+await pool.query('INSERT INTO fee_accounts (adm_no, total_fees, paid_amount) VALUES (?, ?, ?)', ['1002', 100, 25]);
+const admissionUpdate = await api('PUT', '/hod/class-members', { token: hod, body: { code: 'ITECH6', user_id: updateTarget.id, adm_no: 'ITECH6/11702/M2025', name: 'Brian', email: '1002@mtti.ac.ke', parent_email: 'p1002@mail.com', parent_phone: '' } });
+const admissionRefs = await Promise.all(['attendance_logs', 'device_locks', 'parent_alerts', 'points_logs', 'badges', 'temp_id_requests', 'campus_checkins', 'fee_accounts'].map((table) => pool.query(`SELECT adm_no FROM ${table} WHERE adm_no = ?`, ['ITECH6/11702/M2025'])));
+ok('HOD updates an admission number and preserves all linked records', admissionUpdate.status === 200 && (await pool.query('SELECT adm_no FROM students WHERE user_id = ?', [updateTarget.id]))[0][0]?.adm_no === 'ITECH6/11702/M2025' && admissionRefs.every(([rows]) => rows.length > 0));
+ok('changing an admission number invalidates existing student tokens', (await api('GET', '/student/leaderboard', { token: s2 })).status === 401);
+const restoreAdmission = await api('PUT', '/admin/class-members', { token: adminTok, body: { code: 'ITECH6', user_id: updateTarget.id, adm_no: '1002', name: 'Brian', email: '1002@mtti.ac.ke', parent_email: 'p1002@mail.com', parent_phone: '' } });
+ok('administrator can restore the admission number', restoreAdmission.status === 200);
+await pool.query("DELETE FROM parent_alerts WHERE adm_no = '1002' AND alert_reason = 'admission-update-test'");
+await pool.query("DELETE FROM points_logs WHERE adm_no = '1002' AND activity_type = 'admission-update-test'");
+await pool.query("DELETE FROM badges WHERE adm_no = '1002' AND badge_name = 'Admission update test'");
+await pool.query("DELETE FROM temp_id_requests WHERE adm_no = '1002' AND expires_at = '2030-01-01 00:00:00' AND face_score = 0");
+await pool.query("DELETE FROM campus_checkins WHERE adm_no = '1002' AND service_type = 'library' AND status_details IS NULL");
+await pool.query("DELETE FROM fee_accounts WHERE adm_no = '1002'");
+if (addedAdmissionAttendance) await pool.query('DELETE FROM attendance_logs WHERE session_id = ? AND adm_no = ?', [sid, '1002']);
 ok('member update rejects invalid email', (await api('PUT', '/admin/class-members', { token: adminTok, body: { code: 'ITECH6', user_id: updateTarget.id, name: 'Brian', email: 'invalid' } })).status === 400);
 ok('member update rejects duplicate email', (await api('PUT', '/admin/class-members', { token: adminTok, body: { code: 'ITECH6', user_id: updateTarget.id, name: 'Brian', email: '1001@mtti.ac.ke' } })).status === 409);
 const memberUpdate = await api('PUT', '/admin/class-members', { token: adminTok, body: { code: 'ITECH6', user_id: updateTarget.id, name: 'Brian Updated', email: 'brian.updated@mtti.ac.ke', parent_email: 'parent.updated@example.com', parent_phone: '+254700123456' } });
@@ -522,6 +553,23 @@ ok('Carol (never checked in) is absent for both', rowOf('Carol').absent === 2 &&
 ok('totals: 2 of 5 students were present this week', wk.data.totals.students === 5 && wk.data.totals.sessions === 2 && wk.data.totals.presentStudents === 2 && wk.data.totals.perfect === 1, JSON.stringify(wk.data.totals));
 ok('sheet shows which lessons the lecturer has signed', wk.data.sessions[colOf('Networking')].signed === true && wk.data.sessions[colOf('Databases')].signed === false);
 ok('students are sorted by name', wk.data.students.map((s) => s.name).join() === [...wk.data.students.map((s) => s.name)].sort().join());
+
+await pool.query("INSERT INTO classes (class_code, course, module) VALUES ('TIMETZ','ICT Technician','Module 1')");
+const monday = new Date(`${wk.data.weekStart}T00:00:00Z`);
+const utcStamp = (d) => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')} ${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}:${String(d.getUTCSeconds()).padStart(2, '0')}`;
+const eatSessionStamp = (hour, minute) => {
+  const eatWallTime = new Date(monday);
+  eatWallTime.setUTCHours(hour, minute, 0, 0);
+  return utcStamp(new Date(eatWallTime.getTime() - 3 * 60 * 60 * 1000));
+};
+for (const [unit, hour, minute] of [['Morning lesson', 8, 0], ['Mid-morning lesson', 10, 30]]) {
+  const start = eatSessionStamp(hour, minute);
+  const end = utcStamp(new Date(new Date(`${start.replace(' ', 'T')}Z`).getTime() + 60 * 60 * 1000));
+  await pool.query('INSERT INTO sessions (class_code, unit_name, lecturer_name, start_time, end_time, late_threshold_mins, is_active, venue) VALUES (?, ?, ?, ?, ?, 15, 0, ?)', ['TIMETZ', unit, 'Mr Teacher', start, end, 'Room 1']);
+}
+const timeZoneSheet = await api('GET', `/hod/weekly-sheet?class_code=TIMETZ&week=${wk.data.weekStart}`, { token: hod });
+const slotFor = (unit) => timeZoneSheet.data.subjects.find((subject) => subject.unit === unit)?.cells[0]?.slot;
+ok('weekly sheet places lessons by Kenya local time instead of UTC', timeZoneSheet.status === 200 && slotFor('Morning lesson') === 0 && slotFor('Mid-morning lesson') === 1, JSON.stringify(timeZoneSheet.data.subjects));
 await snap();
 
 const prevWeek = isoShift(-7);
@@ -575,7 +623,7 @@ const mkSession = async (cls, unit, lect, start, o = {}) => (await pool.query('I
 const mkLog = (sid, adm, when, late = 0) => pool.query('INSERT INTO attendance_logs (session_id, adm_no, photo_url, gps_lat, gps_lng, is_late, is_offline_synced, device_id, points_earned, timestamp) VALUES (?, ?, ?, 0, 0, ?, 0, ?, 15, ?)', [sid, adm, 'x.jpg', late, 'dev', when]);
 
 const MON = wk.data.weekStart; // Monday of the current week (any weekday this test runs on)
-const at = (day, hm) => stamp(new Date(`${addDays(MON, day)}T${hm}:00`));
+const at = (day, hm) => stamp(new Date(new Date(`${addDays(MON, day)}T${hm}:00Z`).getTime() - 3 * 60 * 60 * 1000));
 const teacherId = (await pool.query("SELECT id FROM users WHERE email = 'teacher@mtti.ac.ke'"))[0][0].id;
 await pool.query("INSERT INTO classes (class_code, course, module, department) VALUES ('REG1/S/26', 'ICT Technician', 'Module 1', 'Computing & Informatics')");
 ok('class teacher can be assigned on class creation', (await api('PUT', '/admin/classes', { token: adminTok, body: { class_code: 'REG1/S/26', course: 'ICT Technician', module: 'Module 1', department: 'Computing & Informatics', class_teacher_id: teacherId } })).status === 200);

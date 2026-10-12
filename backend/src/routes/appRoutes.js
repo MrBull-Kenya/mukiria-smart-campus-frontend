@@ -59,6 +59,8 @@ teacherRouter.get('/absenteeism', teacher.absenteeism);
 export const hodRouter = express.Router();
 hodRouter.get('/dashboard', hod.dashboard);
 hodRouter.get('/classes', hod.classes);
+hodRouter.get('/class-members', admin.classMembers);
+hodRouter.put('/class-members', admin.classMemberUpdate);
 hodRouter.get('/pending-reps', hod.pendingReps);
 hodRouter.post('/approve-rep/:id', hod.approveRep);
 hodRouter.get('/at-risk', hod.atRisk);

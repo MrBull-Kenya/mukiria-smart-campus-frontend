@@ -8,12 +8,14 @@ export default function AllClasses() {
   const state = useFetch('/hod/classes');
   const { user } = useAuth();
   const isAdmin = user?.role === 'admin';
+  const canManageMembers = isAdmin || user?.role === 'hod';
+  const membersPath = isAdmin ? '/admin/class-members' : '/hod/class-members';
   const [selectedClass, setSelectedClass] = useState(null);
   const [members, setMembers] = useState([]);
   const [membersLoading, setMembersLoading] = useState(false);
   const [membersError, setMembersError] = useState('');
   const [editingMember, setEditingMember] = useState(null);
-  const [form, setForm] = useState({ name: '', email: '', parent_email: '', parent_phone: '' });
+  const [form, setForm] = useState({ adm_no: '', name: '', email: '', parent_email: '', parent_phone: '' });
   const [busy, setBusy] = useState(false);
   const [removingId, setRemovingId] = useState(null);
   const [msg, setMsg] = useState(null);
@@ -25,7 +27,7 @@ export default function AllClasses() {
     }
     setSelectedClass(classRow); setMembers([]); setEditingMember(null); setMsg(null); setMembersError(''); setMembersLoading(true);
     try {
-      const { data } = await api.get('/admin/class-members', { params: { code: classRow.code } });
+      const { data } = await api.get(membersPath, { params: { code: classRow.code } });
       setMembers(data);
     } catch (err) {
       setMembersError(getErrorMessage(err, 'Could not load class members.'));
@@ -36,7 +38,7 @@ export default function AllClasses() {
 
   const startEdit = (member) => {
     setEditingMember(member);
-    setForm({ name: member.name, email: member.email, parent_email: member.parent_email || '', parent_phone: member.parent_phone || '' });
+    setForm({ adm_no: member.adm_no || '', name: member.name, email: member.email, parent_email: member.parent_email || '', parent_phone: member.parent_phone || '' });
     setMsg(null);
   };
 
@@ -45,14 +47,14 @@ export default function AllClasses() {
     if (!selectedClass || !editingMember) return;
     setBusy(true); setMsg(null);
     try {
-      const { data } = await api.put('/admin/class-members', {
+      const { data } = await api.put(membersPath, {
         code: selectedClass.code,
         user_id: editingMember.id,
         ...form,
       });
       setMsg({ kind: 'ok', text: data.message });
       setEditingMember(null);
-      const { data: updated } = await api.get('/admin/class-members', { params: { code: selectedClass.code } });
+      const { data: updated } = await api.get(membersPath, { params: { code: selectedClass.code } });
       setMembers(updated);
     } catch (err) {
       setMsg({ kind: 'error', text: getErrorMessage(err, 'Could not update member details.') });
@@ -63,14 +65,14 @@ export default function AllClasses() {
 
   const removeMember = async (member) => {
     const identity = member.adm_no ? `${member.name} (${member.adm_no})` : member.name;
-    if (!window.confirm(`Permanently delete ${identity}? This removes their account, attendance history, and related student records. This cannot be undone.`)) return;
+    if (!isAdmin || !window.confirm(`Permanently delete ${identity}? This removes their account, attendance history, and related student records. This cannot be undone.`)) return;
     setRemovingId(member.id); setMsg(null);
     try {
       const { data } = await api.delete('/admin/class-members', { params: { code: selectedClass.code, user_id: member.id } });
       setMsg({ kind: 'ok', text: data.message });
       if (editingMember?.id === member.id) setEditingMember(null);
       const [{ data: updated }] = await Promise.all([
-        api.get('/admin/class-members', { params: { code: selectedClass.code } }),
+        api.get(membersPath, { params: { code: selectedClass.code } }),
         state.reload(true),
       ]);
       setMembers(updated);
@@ -82,25 +84,25 @@ export default function AllClasses() {
   };
 
   return (
-    <Page title="All classes" subtitle={isAdmin ? 'View class rosters, update member contact details, or permanently delete a member.' : undefined}>
+    <Page title="All classes" subtitle={canManageMembers ? (isAdmin ? 'View class rosters, update member details, or permanently delete a member.' : 'View class rosters and update student details.') : undefined}>
       <Async state={state}>
         {(rows) => <Table rows={rows} empty="No classes exist yet." columns={[
           { key: 'code', label: 'Class' }, { key: 'course', label: 'Course' }, { key: 'module', label: 'Module' }, { key: 'students', label: 'Students' },
           { key: 'attendance', label: 'Avg attendance', render: (r) => <Badge tone={r.students === 0 ? 'gray' : r.attendance >= 75 ? 'green' : 'red'}>{r.students ? `${r.attendance}%` : '—'}</Badge> },
           { key: 'rep', label: 'Class rep' },
-          ...(isAdmin ? [{ key: 'members', label: '', render: (r) => (
+          ...(canManageMembers ? [{ key: 'members', label: '', render: (r) => (
             <button onClick={() => toggleMembers(r)} className="text-[11px] font-bold text-blue-600 underline whitespace-nowrap">
               {selectedClass?.code === r.code ? 'Hide Members' : 'View Members'}
             </button>
           ) }] : []),
         ]} />}
       </Async>
-      {isAdmin && selectedClass && (
+      {canManageMembers && selectedClass && (
         <Card className="space-y-3">
           <div className="flex flex-wrap items-start justify-between gap-2">
             <div>
               <h2 className="text-sm font-black text-gray-900">Members of {selectedClass.code}</h2>
-              <p className="text-xs text-gray-500">Edit names and contact details, or permanently delete an account and its related records.</p>
+              <p className="text-xs text-gray-500">{isAdmin ? 'Edit admission numbers, names, and contact details, or permanently delete an account and its related records.' : 'Edit student admission numbers, names, and contact details.'}</p>
             </div>
             <Btn variant="ghost" onClick={() => { setSelectedClass(null); setMembers([]); setEditingMember(null); }}>Close</Btn>
           </div>
@@ -118,9 +120,9 @@ export default function AllClasses() {
               { key: 'actions', label: '', render: (r) => (
                 <div className="flex gap-3 text-[11px] font-bold">
                   <button onClick={() => startEdit(r)} className="text-blue-600 underline">Edit</button>
-                  <button disabled={removingId === r.id} onClick={() => removeMember(r)} className="text-rose-600 underline disabled:opacity-50">
+                  {isAdmin && <button disabled={removingId === r.id} onClick={() => removeMember(r)} className="text-rose-600 underline disabled:opacity-50">
                     {removingId === r.id ? 'Deleting…' : 'Delete'}
-                  </button>
+                  </button>}
                 </div>
               ) },
             ]} />
@@ -129,8 +131,9 @@ export default function AllClasses() {
             <form onSubmit={saveMember} className="grid gap-3 rounded-xl border border-blue-100 bg-blue-50/50 p-4 md:grid-cols-2">
               <div className="md:col-span-2">
                 <h3 className="text-sm font-bold text-gray-900">Edit {editingMember.name} ({editingMember.adm_no || 'No admission number'})</h3>
-                <p className="mt-1 text-xs text-gray-500">Class, role, admission number, and account status are not changed here.</p>
+                <p className="mt-1 text-xs text-gray-500">Class, role, and account status are not changed here.</p>
               </div>
+              {editingMember.adm_no != null && <Input label="Admission number" required maxLength={50} value={form.adm_no} onChange={(e) => setForm((f) => ({ ...f, adm_no: e.target.value }))} />}
               <Input label="Full name" required maxLength={150} value={form.name} onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))} />
               <Input label="Email" type="email" required maxLength={254} value={form.email} onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))} />
               <Input label="Parent email" type="email" maxLength={254} value={form.parent_email} onChange={(e) => setForm((f) => ({ ...f, parent_email: e.target.value }))} />

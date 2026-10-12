@@ -89,6 +89,7 @@ function QrPanel({ session, onEnd }) {
         <div className="min-w-0">
           <p className="text-green-400 font-bold truncate">{session.unit_name}</p>
           <p className="text-xs text-gray-400 truncate">{user.class_code} · {session.lecturer_name}{session.venue ? ` · ${session.venue}` : ''}</p>
+          {session.startedAt && <p className="text-[11px] text-gray-400">Session started {session.startedAt} EAT</p>}
         </div>
         <div className="text-right shrink-0"><p className="text-3xl font-black text-yellow-400">{timeLeft}s</p><p className="text-[10px] text-gray-400">next code</p></div>
       </div>
