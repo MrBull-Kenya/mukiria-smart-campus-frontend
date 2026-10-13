@@ -8,7 +8,7 @@ let inFlight = null;
 
 const replay = (item) => {
   if (item.type === 'attendance_scan') {
-    return submitScan({ ...item.fields, is_offline_synced: true }, dataUrlToBlob(item.photo));
+    return submitScan({ ...item.fields, is_offline_synced: true }, item.photo ? dataUrlToBlob(item.photo) : undefined);
   }
   return api({ method: item.method || 'POST', url: item.url, data: item.data });
 };

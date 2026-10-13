@@ -5,7 +5,7 @@ import { useFetch } from '../../hooks/useFetch';
 import { getSocket } from '../../services/socket';
 import { getCurrentPosition } from '../../services/geolocation';
 import { useAuth } from '../../context/AuthContext';
-import ScannerWithFace from '../../components/QR/ScannerWithFace';
+import SubmitQrCheckin from '../../components/QR/SubmitQrCheckin';
 import { getAdmNo } from '../../config/campus';
 import { Page, Async, Card, Btn, Input, Notice } from '../../components/ui';
 
@@ -33,9 +33,12 @@ function QrPanel({ session, onEnd }) {
         gps_lat: position.latitude,
         gps_lng: position.longitude,
       });
-      setToken(res.data.token); setRepCode(res.data.rep_checkin_code || ''); setError('');
+      setToken(res.data.token);
+      setRepCode(res.data.rep_checkin_code || '');
+      setError('');
     } catch (err) {
-      setToken(''); setRepCode('');
+      setToken('');
+      setRepCode('');
       if (err?.name === 'GeolocationError') {
         const locationMessages = {
           1: 'Location permission is blocked for this site. Allow location access for mtti-smart-attendance.vercel.app in your browser settings, then retry.',
@@ -72,7 +75,9 @@ function QrPanel({ session, onEnd }) {
 
   const startRepCheckin = async (event) => {
     event.preventDefault();
-    setRepCheckinBusy(true); setRepCheckinError(''); setRepCheckinResult(null);
+    setRepCheckinBusy(true);
+    setRepCheckinError('');
+    setRepCheckinResult(null);
     try {
       const { data } = await api.post('/qr/rep-code/verify', { code: codeInput });
       setRepCheckin({ ...data.data, token: data.token });
@@ -98,37 +103,37 @@ function QrPanel({ session, onEnd }) {
       </div>
       {user.role === 'student_rep' && (
         <div className="rounded-xl border border-gray-700 bg-gray-800 p-4 space-y-3">
-          <div className="text-center">
-            <p className="text-xs text-gray-300">Class rep check-in code</p>
-            <p className="font-mono text-3xl font-black tracking-[0.25em] text-white">{repCode || '--------'}</p>
-            <p className="text-[10px] text-gray-400">Rotates with the QR. Enter this code below to check yourself in.</p>
+          <div className="text-center text-xs text-gray-300">
+            <p className="text-xs text-gray-300">Your rotating class-rep check-in code</p>
+            <p className="my-2 font-mono text-3xl font-black tracking-[0.25em] text-white" aria-live="polite">{repCode || '--------'}</p>
+            <p className="text-[10px] text-gray-400">Enter this code to verify your own check-in. It refreshes with the QR.</p>
           </div>
           {repCheckin ? (
-            <ScannerWithFace
+            <SubmitQrCheckin
               sessionId={repCheckin.session_id}
               qrToken={repCheckin.token}
               admNo={getAdmNo(user)}
-              classCode={repCheckin.class_code}
               onComplete={(result) => { setRepCheckin(null); setRepCheckinResult(result); }}
               onCancel={() => setRepCheckin(null)}
             />
           ) : (
             <form onSubmit={startRepCheckin} className="space-y-2">
               <Input
-                label="Enter the code to check in yourself"
+                label="Enter your current 8-digit check-in code"
                 inputMode="numeric"
                 autoComplete="one-time-code"
                 pattern="[0-9]{8}"
                 maxLength={8}
                 required
+                disabled={!repCode || !!repCheckinResult}
                 value={codeInput}
                 onChange={(event) => setCodeInput(event.target.value.replace(/\D/g, '').slice(0, 8))}
                 placeholder="8-digit code"
                 className="bg-gray-700 border-gray-600 text-white placeholder:text-gray-400"
               />
               {repCheckinError && <Notice kind="error">{repCheckinError}</Notice>}
-              <Btn type="submit" disabled={repCheckinBusy || codeInput.length !== 8}>
-                {repCheckinBusy ? 'Verifying…' : 'Continue to selfie check-in'}
+              <Btn type="submit" disabled={!repCode || repCheckinBusy || codeInput.length !== 8 || !!repCheckinResult} className="w-full">
+                {repCheckinBusy ? 'Verifying code…' : 'Verify code & check in'}
               </Btn>
             </form>
           )}
@@ -144,7 +149,7 @@ function QrPanel({ session, onEnd }) {
         <p className="text-sm text-gray-300">Checked in</p>
         <p className="text-2xl font-black text-green-400">{count}<span className="text-sm text-gray-400"> / {total}</span></p>
       </div>
-      <p className="text-[11px] text-gray-400">The code changes every {ROTATE_SECONDS} seconds. Class reps can generate it from anywhere. Students must be on campus and within 20 m of the rep’s location when the code was generated. A selfie and registered phone are also required.</p>
+      <p className="text-[11px] text-gray-400">The QR code changes every {ROTATE_SECONDS} seconds. Students must be on campus and within 20 m of the rep’s location when the code was generated, using their registered phone.</p>
       <Btn variant="danger" onClick={onEnd} className="w-full">End session</Btn>
     </div>
   );

@@ -29,8 +29,8 @@ export function dataUrlToBlob(dataUrl) {
 }
 
 /**
- * POST /attendance/scan expects multipart/form-data:
- *   text fields: session_id, adm_no, gps_lat, gps_lng, device_id   file field: "photo"
+ * POST /attendance/scan accepts attendance fields as multipart/form-data.
+ * The photo field is optional; check-in uses the signed QR token and GPS.
  * (see backend/src/routes/attendanceRoutes.js -> uploadFace.single('photo'))
  */
 export function submitScan(fields, photoBlob) {

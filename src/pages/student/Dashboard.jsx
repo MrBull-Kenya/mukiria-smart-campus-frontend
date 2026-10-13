@@ -17,7 +17,7 @@ export default function StudentDashboard() {
               <Stat label="Streak" value={`${d.streak} 🔥`} hint="Sessions in a row" />
             </div>
             <LinkGrid Link={Link} items={[
-              { to: '/scan', icon: '📷', label: 'Scan attendance', hint: 'QR + selfie + GPS' },
+              { to: '/scan', icon: '📷', label: 'Scan attendance', hint: 'QR + GPS' },
               { to: '/student/history', icon: '🗓️', label: 'My history' },
               { to: '/student/exam-eligibility', icon: '🎓', label: 'Exam eligibility' },
               { to: '/student/digital-id', icon: '🪪', label: 'Digital ID' },

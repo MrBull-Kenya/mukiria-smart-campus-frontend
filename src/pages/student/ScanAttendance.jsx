@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useAuth } from '../../context/AuthContext';
-import ScannerWithFace from '../../components/QR/ScannerWithFace';
+import SubmitQrCheckin from '../../components/QR/SubmitQrCheckin';
 import OfflineSyncBadge from '../../components/Common/OfflineSyncBadge';
 import { startQrScanner } from '../../services/qrScanner';
 import { parseQrToken, verifyQrToken } from '../../services/attendance';
@@ -13,7 +13,7 @@ export default function ScanAttendance() {
 
   const videoRef = useRef(null);
   const stopRef = useRef(null);
-  const [step, setStep] = useState('idle'); // idle | scanning | selfie | done
+  const [step, setStep] = useState('idle'); // idle | scanning | checkin | done
   const [session, setSession] = useState(null);
   const [manual, setManual] = useState('');
   const [error, setError] = useState('');
@@ -48,7 +48,7 @@ export default function ScanAttendance() {
       }
     }
     setSession({ ...parsed.payload, token: text.trim() });
-    setStep('selfie');
+    setStep('checkin');
   }, [user, stopScanner]);
 
   const startScan = async () => {
@@ -71,17 +71,16 @@ export default function ScanAttendance() {
       <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-xl space-y-4">
         <div className="text-center space-y-1">
           <h2 className="text-xl font-black text-gray-900">Secure Attendance Check-in</h2>
-          <p className="text-xs text-gray-500">1. Scan the class QR &nbsp;·&nbsp; 2. Selfie &nbsp;·&nbsp; 3. GPS is checked automatically</p>
+          <p className="text-xs text-gray-500">Scan the class QR code, then confirm check-in using your device’s location.</p>
         </div>
 
         {error && <div className="p-3 bg-amber-50 border border-amber-200 text-amber-800 text-xs rounded-xl font-medium">{error}</div>}
 
-        {step === 'selfie' && session && (
-          <ScannerWithFace
+        {step === 'checkin' && session && (
+          <SubmitQrCheckin
             sessionId={session.session_id}
             qrToken={session.token}
             admNo={admNo}
-            classCode={session.class_code}
             onComplete={done}
             onCancel={cancel}
           />

@@ -34,16 +34,16 @@ export const notifyQueueChanged = () => window.dispatchEvent(new Event(QUEUE_EVE
 
 /**
  * Queue an attendance scan taken without a connection.
- * The selfie is stored as a data URL (Blobs in IndexedDB are unreliable on older iOS Safari)
- * and turned back into a file when it is synced.
+ * Older queued scans may still include a selfie data URL for backwards compatibility.
  */
 export async function saveScanOffline({ fields, photoDataUrl }) {
-  const id = await saveOfflineData('syncQueue', {
+  const item = {
     type: 'attendance_scan',
     fields,
-    photo: photoDataUrl,
     created_at: Date.now(),
-  });
+  };
+  if (photoDataUrl) item.photo = photoDataUrl;
+  const id = await saveOfflineData('syncQueue', item);
   notifyQueueChanged();
   return id;
 }

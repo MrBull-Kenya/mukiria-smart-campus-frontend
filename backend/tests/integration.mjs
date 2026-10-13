@@ -130,11 +130,12 @@ ok('forged qr rejected', (await api('POST', '/qr/verify', { token: s1, body: { t
 ok('garbage qr rejected', (await api('POST', '/qr/verify', { token: s1, body: { token: 'garbage' } })).status === 400);
 
 const photo = () => new Blob([Buffer.from('/9j/4AAQSkZJRg==', 'base64')], { type: 'image/jpeg' });
-const scan = (token, fields, qr = tok) => { const f = new FormData(); Object.entries({ session_id: sid, gps_lat: -1.123, gps_lng: 37.123, qr_token: qr, ...fields }).forEach(([k, v]) => f.append(k, String(v))); f.append('photo', photo(), 'selfie.jpg'); return api('POST', '/attendance/scan', { token, form: f }); };
+const scan = (token, fields, qr = tok, includePhoto = true) => { const f = new FormData(); Object.entries({ session_id: sid, gps_lat: -1.123, gps_lng: 37.123, qr_token: qr, ...fields }).forEach(([k, v]) => f.append(k, String(v))); if (includePhoto) f.append('photo', photo(), 'selfie.jpg'); return api('POST', '/attendance/scan', { token, form: f }); };
 
 await snap();
-const sc1 = await scan(s1, { adm_no: '1001', device_id: 'dev-s1' });
-ok('student 1 checks in (multipart + photo)', sc1.status === 201 && sc1.data.points_earned === 15 && sc1.data.is_late === false, JSON.stringify(sc1.data));
+const sc1 = await scan(s1, { adm_no: '1001', device_id: 'dev-s1' }, tok, false);
+const sc1Photo = (await pool.query('SELECT photo_url FROM attendance_logs WHERE session_id = ? AND adm_no = ?', [sid, '1001']))[0][0]?.photo_url;
+ok('student checks in using QR without a selfie photo', sc1.status === 201 && sc1.data.points_earned === 15 && sc1.data.is_late === false && sc1Photo == null, JSON.stringify(sc1.data));
 ok('duplicate scan blocked (409)', (await scan(s1, { adm_no: '1001', device_id: 'dev-s1' })).status === 409);
 ok('outside geofence blocked', (await scan(s2, { adm_no: '1002', device_id: 'dev-s2', gps_lat: 0.0, gps_lng: 37.0 })).status === 403);
 ok('wrong device blocked', (await scan(s2, { adm_no: '1002', device_id: 'stolen-phone' })).status === 403);
@@ -1136,8 +1137,9 @@ try {
   Date.now = qrGeneratedAt;
 }
 const resolvedRepCode = await api('POST', '/qr/rep-code/verify', { token: repT, body: { code: repQr.data.rep_checkin_code } });
-const repCheckin = await scan(repT, { session_id: repCheckinSession.data.id, adm_no: '1000', device_id: 'dev-rep' }, resolvedRepCode.data.token);
-ok('class rep code refreshes an almost-expired QR for selfie check-in', repCheckinSession.status === 201 && repQr.status === 200 && resolvedRepCode.status === 200 && resolvedRepCode.data.token !== repQr.data.token && resolvedRepCode.data.data.timestamp > repQr.data.payload.timestamp + 30_000 && qrGeneratedAt() - resolvedRepCode.data.data.timestamp < 5_000 && repCheckin.status === 201 && repCheckin.data.points_earned > 0);
+const repCheckin = await scan(repT, { session_id: repCheckinSession.data.id, adm_no: '1000', device_id: 'dev-rep' }, resolvedRepCode.data.token, false);
+const repCheckinPhoto = (await pool.query('SELECT photo_url FROM attendance_logs WHERE session_id = ? AND adm_no = ?', [repCheckinSession.data.id, '1000']))[0][0]?.photo_url;
+ok('class rep code refreshes an almost-expired QR for selfie-free check-in', repCheckinSession.status === 201 && repQr.status === 200 && resolvedRepCode.status === 200 && resolvedRepCode.data.token !== repQr.data.token && resolvedRepCode.data.data.timestamp > repQr.data.payload.timestamp + 30_000 && qrGeneratedAt() - resolvedRepCode.data.data.timestamp < 5_000 && repCheckin.status === 201 && repCheckin.data.points_earned > 0 && repCheckinPhoto == null);
 if (process.env.FIXTURES_OUT) fs.writeFileSync(process.env.FIXTURES_OUT, JSON.stringify(FIX));
 console.log(JSON.stringify({ pass, fail, failures }, null, 1));
 process.exit(fail ? 1 : 0);
