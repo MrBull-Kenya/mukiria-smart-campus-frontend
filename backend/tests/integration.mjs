@@ -257,7 +257,7 @@ await snap();
 const hd = await api('GET', '/hod/dashboard', { token: hod });
 ok('hod dashboard', hd.data?.totalClasses === 2 && hd.data.totalStudents === 6 && hd.data.pendingTimetables === 1, JSON.stringify(hd.data));
 const hc = await api('GET', '/hod/classes', { token: hod });
-ok('hod classes with rep + counts', hc.data?.find(c => c.code === 'ITECH6')?.students === 5 && hc.data.find(c => c.code === 'ITECH6').rep === 'Rita Rep', JSON.stringify(hc.data));
+ok('hod classes include department, rep, and counts', hc.data?.find(c => c.code === 'ITECH6')?.students === 5 && hc.data.find(c => c.code === 'ITECH6').rep === 'Rita Rep' && hc.data.find(c => c.code === 'ITECH6').department === 'Computing & Informatics', JSON.stringify(hc.data));
 const ar = await api('GET', '/hod/at-risk', { token: hod });
 ok('hod at-risk list', ar.data?.students?.some(s => s.adm === '1003' && s.missed === 1), JSON.stringify(ar.data)?.slice(0, 200));
 const fr = await api('GET', '/hod/final-reports', { token: hod });

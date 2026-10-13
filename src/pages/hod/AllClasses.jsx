@@ -3,6 +3,7 @@ import api, { getErrorMessage } from '../../services/api';
 import { useFetch } from '../../hooks/useFetch';
 import { useAuth } from '../../context/AuthContext';
 import { Page, Async, Table, Badge, Btn, Card, Input, Notice } from '../../components/ui';
+import { DEPARTMENTS } from '../../constants/departments';
 
 export default function AllClasses() {
   const state = useFetch('/hod/classes');
@@ -19,6 +20,7 @@ export default function AllClasses() {
   const [busy, setBusy] = useState(false);
   const [removingId, setRemovingId] = useState(null);
   const [msg, setMsg] = useState(null);
+  const [departmentFilter, setDepartmentFilter] = useState('');
 
   const toggleMembers = async (classRow) => {
     if (selectedClass?.code === classRow.code) {
@@ -86,16 +88,44 @@ export default function AllClasses() {
   return (
     <Page title="All classes" subtitle={canManageMembers ? (isAdmin ? 'View class rosters, update member details, or permanently delete a member.' : 'View class rosters and update student details.') : undefined}>
       <Async state={state}>
-        {(rows) => <Table rows={rows} empty="No classes exist yet." columns={[
-          { key: 'code', label: 'Class' }, { key: 'course', label: 'Course' }, { key: 'module', label: 'Module' }, { key: 'students', label: 'Students' },
-          { key: 'attendance', label: 'Avg attendance', render: (r) => <Badge tone={r.students === 0 ? 'gray' : r.attendance >= 75 ? 'green' : 'red'}>{r.students ? `${r.attendance}%` : '—'}</Badge> },
-          { key: 'rep', label: 'Class rep' },
-          ...(canManageMembers ? [{ key: 'members', label: '', render: (r) => (
-            <button onClick={() => toggleMembers(r)} className="text-[11px] font-bold text-blue-600 underline whitespace-nowrap">
-              {selectedClass?.code === r.code ? 'Hide Members' : 'View Members'}
-            </button>
-          ) }] : []),
-        ]} />}
+        {(rows) => {
+          const departments = [...new Map(
+            rows.map((row) => String(row.department || '').trim())
+              .filter(Boolean)
+              .map((department) => {
+                const known = DEPARTMENTS.find((item) => item.toLowerCase() === department.toLowerCase());
+                return [department.toLowerCase(), known || department];
+              })
+          ).values()].sort((a, b) => a.localeCompare(b));
+          const filteredRows = departmentFilter
+            ? rows.filter((row) => String(row.department || '').trim().toLowerCase() === departmentFilter.toLowerCase())
+            : rows;
+
+          return (
+            <>
+              <Card className="flex flex-wrap items-end gap-3">
+                <label className="block w-full max-w-sm">
+                  <span className="block text-xs font-bold text-gray-700 mb-1">Filter by department</span>
+                  <select value={departmentFilter} onChange={(event) => setDepartmentFilter(event.target.value)} className="w-full bg-gray-50 border border-gray-300 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-blue-500">
+                    <option value="">All departments</option>
+                    {departments.map((department) => <option key={department} value={department}>{department}</option>)}
+                  </select>
+                </label>
+                <span className="pb-2 text-xs text-gray-500">{filteredRows.length} of {rows.length} classes</span>
+              </Card>
+              <Table rows={filteredRows} empty={departmentFilter ? 'No classes are assigned to this department.' : 'No classes exist yet.'} columns={[
+                { key: 'code', label: 'Class' }, { key: 'course', label: 'Course' }, { key: 'module', label: 'Module' }, { key: 'department', label: 'Department', render: (r) => r.department || 'Unassigned' }, { key: 'students', label: 'Students' },
+                { key: 'attendance', label: 'Avg attendance', render: (r) => <Badge tone={r.students === 0 ? 'gray' : r.attendance >= 75 ? 'green' : 'red'}>{r.students ? `${r.attendance}%` : '—'}</Badge> },
+                { key: 'rep', label: 'Class rep' },
+                ...(canManageMembers ? [{ key: 'members', label: '', render: (r) => (
+                  <button onClick={() => toggleMembers(r)} className="text-[11px] font-bold text-blue-600 underline whitespace-nowrap">
+                    {selectedClass?.code === r.code ? 'Hide Members' : 'View Members'}
+                  </button>
+                ) }] : []),
+              ]} />
+            </>
+          );
+        }}
       </Async>
       {canManageMembers && selectedClass && (
         <Card className="space-y-3">

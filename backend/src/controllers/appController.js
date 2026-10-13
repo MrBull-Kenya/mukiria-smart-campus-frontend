@@ -765,10 +765,10 @@ export const hod = {
     });
   }),
   classes: wrap(async (req, res) => {
-    const classes = await q('SELECT c.class_code, c.course, c.module, u.name AS rep FROM classes c LEFT JOIN users u ON u.id = c.rep_id ORDER BY c.class_code');
+    const classes = await q('SELECT c.class_code, c.course, c.module, c.department, u.name AS rep FROM classes c LEFT JOIN users u ON u.id = c.rep_id ORDER BY c.class_code');
     const stats = new Map((await q("SELECT u.class_code, COUNT(*) AS n, AVG(s.attendance_pct) AS avg FROM students s JOIN users u ON u.id = s.user_id WHERE u.status = 'active' GROUP BY u.class_code")).map((r) => [r.class_code, r]));
     const reps = new Map((await q("SELECT class_code, name FROM users WHERE role = 'student_rep' AND status = 'active'")).map((r) => [r.class_code, r.name]));
-    res.json(classes.map((c) => ({ code: c.class_code, course: c.course, module: c.module, students: stats.get(c.class_code)?.n || 0, attendance: Math.round(Number(stats.get(c.class_code)?.avg || 0) * 10) / 10, rep: c.rep || reps.get(c.class_code) || 'Not assigned' })));
+    res.json(classes.map((c) => ({ code: c.class_code, course: c.course, module: c.module, department: c.department || '', students: stats.get(c.class_code)?.n || 0, attendance: Math.round(Number(stats.get(c.class_code)?.avg || 0) * 10) / 10, rep: c.rep || reps.get(c.class_code) || 'Not assigned' })));
   }),
   pendingReps: wrap(async (req, res) => {
     const rows = await q("SELECT u.id, u.name, u.email, u.class_code, s.adm_no FROM users u LEFT JOIN students s ON s.user_id = u.id WHERE u.role = 'student_rep' AND u.status = 'pending' ORDER BY u.id");
