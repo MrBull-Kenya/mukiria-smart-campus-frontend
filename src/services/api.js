@@ -9,6 +9,10 @@ const api = axios.create({ baseURL: API_BASE_URL, timeout: 20000 });
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem(STORAGE_KEYS.token);
   if (token) config.headers.Authorization = `Bearer ${token}`;
+  if (config.url === '/classrep/manual-attendance' || config.url?.startsWith('/classrep/manual-attendance?')) {
+    const pinToken = sessionStorage.getItem('mtt_manual_attendance_pin');
+    if (pinToken) config.headers['X-Manual-Attendance-Token'] = pinToken;
+  }
   return config;
 });
 
@@ -38,6 +42,10 @@ api.interceptors.response.use(
 
     // Expired / invalid session -> let AuthProvider clear it (React Router then redirects to /login).
     const serverMsg = res.data?.error || res.data?.message || '';
+    if (res.status === 403 && res.data?.code === 'MANUAL_ATTENDANCE_PIN_REQUIRED') {
+      sessionStorage.removeItem('mtt_manual_attendance_pin');
+      window.dispatchEvent(new Event('mtt:manual-attendance-locked'));
+    }
     const badSession =
       res.status === 401 || (res.status === 403 && /invalid or expired token/i.test(serverMsg));
     if (badSession && !AUTH_ENDPOINTS.some((p) => url.startsWith(p))) {

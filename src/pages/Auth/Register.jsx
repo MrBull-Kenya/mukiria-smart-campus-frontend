@@ -2,9 +2,9 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 
 const OPTIONS = [
-  { to: '/auth/register-student', icon: '🎓', title: 'Student', text: 'Check in to classes, see your attendance and points' },
+  { to: '/auth/register-student', icon: '🎓', title: 'Trainee', text: 'Check in to classes, see your attendance and points' },
   { to: '/auth/register-class-rep', icon: '📋', title: 'Class representative', text: 'Run your class QR sessions. Needs HOD approval.' },
-  { to: '/auth/register-teacher', icon: '👩‍🏫', title: 'Teacher', text: 'Sign class registers and track absenteeism. Needs Administrator approval.' },
+  { to: '/auth/register-teacher', icon: '👩‍🏫', title: 'Trainer', text: 'Sign class registers and track absenteeism. Needs Administrator approval.' },
   { to: '/auth/register-hod', icon: '🏫', title: 'Head of Department (HOD)', text: 'Approve reps and timetables, reports and exam eligibility. Needs Administrator approval.' },
   { to: '/auth/register-admin', icon: '🛡️', title: 'Administrator', text: 'Manage classes and staff accounts. The first Administrator is approved automatically.' },
 ];

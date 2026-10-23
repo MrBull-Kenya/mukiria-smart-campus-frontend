@@ -49,6 +49,7 @@ const ParentAlerts = page(() => import('./pages/classrep/ParentAlerts'));
 const TeacherDashboard = page(() => import('./pages/teacher/Dashboard'));
 const SignAttendance = page(() => import('./pages/teacher/SignAttendance'));
 const MySubjectsAbsenteeism = page(() => import('./pages/teacher/MySubjectsAbsenteeism'));
+const SessionAbsentees = page(() => import('./pages/teacher/SessionAbsentees'));
 // HOD
 const HodDashboard = page(() => import('./pages/hod/Dashboard'));
 const AllClasses = page(() => import('./pages/hod/AllClasses'));
@@ -65,11 +66,13 @@ const HodDevices = page(() => import('./pages/hod/Devices'));
 const AdminDashboard = page(() => import('./pages/admin/Dashboard'));
 const AdminClasses = page(() => import('./pages/admin/Classes'));
 const AdminStaff = page(() => import('./pages/admin/Staff'));
+const AdminActivityLog = page(() => import('./pages/admin/ActivityLog'));
 const AdminSettings = page(() => import('./pages/admin/Settings'));
 // Campus (all roles)
 const LibraryCheckin = page(() => import('./pages/campus/LibraryCheckin'));
 const GamesAttendance = page(() => import('./pages/campus/GamesAttendance'));
 const FeesClearance = page(() => import('./pages/campus/FeesClearance'));
+const Profile = page(() => import('./pages/Profile'));
 
 const Fallback = () => (
   <div className="flex items-center justify-center p-16">
@@ -124,6 +127,7 @@ export default function App() {
             <Route element={<ProtectedRoute />}>
               <Route element={<AppLayout />}>
                 <Route path="/unauthorized" element={<Unauthorized />} />
+                <Route path="/profile" element={<Profile />} />
 
                 <Route element={<ProtectedRoute roles={ACCESS.campus} />}>
                   <Route path="/campus/library" element={<LibraryCheckin />} />
@@ -162,6 +166,7 @@ export default function App() {
                 <Route element={<ProtectedRoute roles={ACCESS.teacher} />}>
                   <Route path="/teacher/dashboard" element={<TeacherDashboard />} />
                   <Route path="/teacher/sign-attendance" element={<SignAttendance />} />
+                  <Route path="/teacher/absent" element={<SessionAbsentees />} />
                   <Route path="/teacher/absenteeism" element={<MySubjectsAbsenteeism />} />
                 </Route>
 
@@ -169,6 +174,7 @@ export default function App() {
                   <Route path="/admin/dashboard" element={<AdminDashboard />} />
                   <Route path="/admin/classes" element={<AdminClasses />} />
                   <Route path="/admin/staff" element={<AdminStaff />} />
+                  <Route path="/admin/activity" element={<AdminActivityLog />} />
                   <Route path="/admin/settings" element={<AdminSettings />} />
                 </Route>
 

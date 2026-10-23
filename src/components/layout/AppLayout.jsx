@@ -47,6 +47,9 @@ export default function AppLayout() {
           <div className="flex items-center gap-2 shrink-0">
             <InstallButton />
             <NotificationBell />
+            <NavLink to="/profile" aria-label="Open your profile" title="Profile" className="flex h-9 w-9 items-center justify-center rounded-full border border-blue-200 bg-blue-50 text-sm font-black text-blue-700 hover:bg-blue-100">
+              {user.name?.trim()?.charAt(0)?.toUpperCase() || '👤'}
+            </NavLink>
             <button onClick={handleLogout} className="h-9 text-xs font-bold text-rose-600 border border-rose-200 rounded-lg px-3 hover:bg-rose-50 transition">
               Log out
             </button>

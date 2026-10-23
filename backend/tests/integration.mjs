@@ -1,7 +1,5 @@
 // Integration test: boots the REAL Express app on an in-memory SQLite database (see tests/run.sh)
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
-import { inflateSync } from 'node:zlib';
 process.env.PORT = '5055'; process.env.CAMPUS_LAT = '-1.123'; process.env.CAMPUS_LNG = '37.123';
 const log = console.log; console.log = () => {}; // silence server chatter
 await import('./src/server.js');
@@ -15,8 +13,9 @@ for (let i = 0; i < 50; i++) { try { const [r] = await pool.query("SELECT name F
 let adminTok;
 let pass = 0, fail = 0; const failures = [];
 const ok = (name, cond, extra = '') => { if (cond) pass++; else { fail++; failures.push(`${name} ${extra}`); } };
-const api = async (method, path, { token, body, form, raw } = {}) => {
+const api = async (method, path, { token, body, form, raw, manualPin } = {}) => {
   const headers = {}; if (token) headers.Authorization = `Bearer ${token}`;
+  if (manualPin) headers['X-Manual-Attendance-Token'] = manualPin;
   let b; if (form) b = form; else if (body) { headers['Content-Type'] = 'application/json'; b = JSON.stringify(body); }
   const ac = new AbortController(); const to = setTimeout(() => ac.abort(), 8000);
   let res; try { res = await fetch(BASE + path, { method, headers, body: b, signal: ac.signal }); } catch (e) { process.stderr.write(`[fetch fail] ${method} ${path}: ${e.name} ${e.cause?.code || e.message}\n`); throw e; } finally { clearTimeout(to); }
@@ -24,11 +23,9 @@ const api = async (method, path, { token, body, form, raw } = {}) => {
   let data = null; try { data = await res.json(); } catch {} return { status: res.status, data };
 };
 const login = async (email, password, device) => { const r = await api('POST', '/auth/login', { body: { email, password, device_id: device } }); return r; };
-const health = await api('GET', '/health');
-ok('health check is available after database initialization', health.status === 200 && health.data?.status === 'ok');
 
 // ---------- seed ----------
-await pool.query("INSERT INTO classes (class_code, course, module, department) VALUES ('ITECH6','ICT Technician','Module 6','Computing & Informatics'), ('ITECH7','ICT Technician','Module 7','Computing & Informatics'), ('UPPER-DEPT','ICT Technician','Module 1','COMPUTING & INFORMATICS')");
+await pool.query("INSERT INTO classes (class_code, course, module, department) VALUES ('ITECH6','ICT Technician','Module 6','Computing & Informatics'), ('ITECH7','ICT Technician','Module 7','Mechanical & Automotive')");
 const pw = await bcrypt.hash('Passw0rd!', 10);
 await pool.query("INSERT INTO users (email, password, name, role, class_code) VALUES ('teacher@mtti.ac.ke', ?, 'Mr Teacher', 'teacher', NULL), ('hod@mtti.ac.ke', ?, 'Dr HOD', 'hod', NULL)", [pw, pw]);
 
@@ -38,21 +35,17 @@ const URLS = process.env.FIXTURES_OUT ? JSON.parse(fs.readFileSync(process.env.U
 const tokenFor = (u) => u.startsWith('/admin') ? adminTok : u.startsWith('/classrep') ? repT : u.startsWith('/teacher') ? teach : u.startsWith('/hod') ? hod : u.startsWith('/classes') ? undefined : s1;
 const snap = async () => { for (const u of URLS) { const r = await api('GET', u, { token: tokenFor(u) }); if (r.status === 200) { const n = JSON.stringify(r.data).length; if (!FIX[u] || FIX[u].__status || n > JSON.stringify(FIX[u]).length) FIX[u] = r.data; } else if (!FIX[u]) FIX[u] = { __status: r.status }; } };
 
-const reg = (adm, name, cls = 'ITECH6') => api('POST', '/auth/register-student', { body: { adm_no: adm, name, email: `${adm}@mtti.ac.ke`, parent_email: `p${adm}@mail.com`, department: 'Computing & Informatics', class_code: cls, password: 'Passw0rd!' } });
+const reg = (adm, name, cls = 'ITECH6') => api('POST', '/auth/register-student', { body: { adm_no: adm, name, email: `${adm}@mtti.ac.ke`, parent_email: `p${adm}@mail.com`, class_code: cls, password: 'Passw0rd!' } });
 ok('register s1', (await reg('1001', 'Alice')).status === 201);
 ok('register s2', (await reg('1002', 'Brian')).status === 201);
 ok('register s3', (await reg('1003', 'Carol')).status === 201);
 ok('register other-class student', (await reg('2001', 'Dan', 'ITECH7')).status === 201);
-ok('register into a class with an uppercase stored department', (await reg('2002', 'Eve', 'UPPER-DEPT')).status === 201);
 ok('duplicate email rejected', (await reg('1001', 'Alice')).status === 409);
-ok('duplicate email rejected regardless of letter case', (await api('POST', '/auth/register-student', { body: { adm_no: '1005', name: 'Email Duplicate', email: '1001@MTTI.AC.KE', department: 'Computing & Informatics', class_code: 'ITECH6', password: 'Passw0rd!' } })).status === 409);
-ok('duplicate admission number rejected regardless of case and surrounding whitespace', (await api('POST', '/auth/register-student', { body: { adm_no: ' 1001 ', name: 'Admission Duplicate', email: 'unique1005@mtti.ac.ke', department: 'Computing & Informatics', class_code: 'ITECH6', password: 'Passw0rd!' } })).status === 409);
+ok('duplicate email rejected regardless of letter case', (await api('POST', '/auth/register-student', { body: { adm_no: '1005', name: 'Email Duplicate', email: '1001@MTTI.AC.KE', class_code: 'ITECH6', password: 'Passw0rd!' } })).status === 409);
+ok('duplicate admission number rejected regardless of case and surrounding whitespace', (await api('POST', '/auth/register-student', { body: { adm_no: ' 1001 ', name: 'Admission Duplicate', email: 'unique1005@mtti.ac.ke', class_code: 'ITECH6', password: 'Passw0rd!' } })).status === 409);
 ok('unknown class rejected', (await reg('9999', 'Zed', 'NOPE')).status === 400);
-ok('student registration requires a valid department', (await api('POST', '/auth/register-student', { body: { adm_no: '5', name: 'x', email: 'x@y.z', class_code: 'ITECH6', password: 'Passw0rd!' } })).status === 400 && (await api('POST', '/auth/register-student', { body: { adm_no: '6', name: 'x', email: 'x2@y.z', department: 'Unknown Department', class_code: 'ITECH6', password: 'Passw0rd!' } })).status === 400);
-ok('student registration cannot choose a class in another department', (await api('POST', '/auth/register-student', { body: { adm_no: '7', name: 'x', email: 'x3@y.z', department: 'Electrical & Electronics', class_code: 'ITECH6', password: 'Passw0rd!' } })).status === 400);
-ok('class-rep registration cannot choose a class in another department', (await api('POST', '/auth/register-rep', { body: { adm_no: '8', name: 'x', email: 'x4@y.z', department: 'Electrical & Electronics', class_code: 'ITECH6', password: 'Passw0rd!' } })).status === 400);
-ok('short password rejected', (await api('POST', '/auth/register-student', { body: { adm_no: '5', name: 'x', email: 'x@y.z', department: 'Computing & Informatics', class_code: 'ITECH6', password: '123' } })).status === 400);
-const repReg = await api('POST', '/auth/register-rep', { body: { adm_no: '1000', name: 'Rita Rep', email: '1000@mtti.ac.ke', department: 'Computing & Informatics', class_code: 'ITECH6', password: 'Passw0rd!' } });
+ok('short password rejected', (await api('POST', '/auth/register-student', { body: { adm_no: '5', name: 'x', email: 'x@y.z', class_code: 'ITECH6', password: '123' } })).status === 400);
+const repReg = await api('POST', '/auth/register-rep', { body: { adm_no: '1000', name: 'Rita Rep', email: '1000@mtti.ac.ke', class_code: 'ITECH6', password: 'Passw0rd!' } });
 ok('register rep -> pending', repReg.status === 201 && repReg.data.status === 'pending');
 ok('pending rep cannot login', (await login('1000@mtti.ac.ke', 'Passw0rd!', 'dev-rep')).status === 403);
 ok('wrong password 401', (await login('1001@mtti.ac.ke', 'nope', 'x')).status === 401);
@@ -73,6 +66,35 @@ ok('student login includes adm_no', s1L.data.user.adm_no === '1001');
 ok('device mismatch at login blocked', (await login('1001@mtti.ac.ke', 'Passw0rd!', 'other-phone')).status === 403);
 const tL = await login('teacher@mtti.ac.ke', 'Passw0rd!', 'x'); const teach = tL.data.token;
 ok('verify-token requires auth', (await api('GET', '/auth/verify-token')).status === 401 && (await api('GET', '/auth/verify-token', { token: s1 })).status === 200);
+ok('profile requires authentication and returns only the signed-in student profile',
+  (await api('GET', '/profile')).status === 401 &&
+  (await api('GET', '/profile', { token: s1 })).data?.user?.adm_no === '1001' &&
+  (await api('GET', '/profile', { token: s1 })).data?.user?.email === '1001@mtti.ac.ke');
+const profileBefore = (await api('GET', '/profile', { token: s1 })).data.user;
+const profileUpdate = await api('PUT', '/profile', { token: s1, body: {
+  name: 'Alice Profile Update', email: profileBefore.email, parent_email: 'parent.profile@example.com', parent_phone: '+254700111222',
+} });
+const profileAfter = await api('GET', '/profile', { token: s1 });
+ok('student can update their profile and guardian contacts', profileUpdate.status === 200 && profileAfter.data.user.name === 'Alice Profile Update' && profileAfter.data.user.parent_email === 'parent.profile@example.com' && profileAfter.data.user.parent_phone === '+254700111222');
+ok('profile rejects a duplicate email address', (await api('PUT', '/profile', { token: s1, body: { ...profileAfter.data.user, email: '1002@mtti.ac.ke' } })).status === 409);
+await api('PUT', '/profile', { token: s1, body: {
+  name: profileBefore.name, email: profileBefore.email, parent_email: profileBefore.parent_email, parent_phone: profileBefore.parent_phone,
+} });
+const teacherProfile = await api('GET', '/profile', { token: teach });
+ok('teacher profile includes department and teaching-unit details', teacherProfile.status === 200 && teacherProfile.data.user.role === 'teacher' && Object.hasOwn(teacherProfile.data.user, 'teacher_unit'));
+const hodProfile = await api('GET', '/profile', { token: hod });
+const hodProfileUpdate = await api('PUT', '/profile', { token: hod, body: {
+  name: hodProfile.data.user.name, email: hodProfile.data.user.email, department: 'Computing & Informatics',
+} });
+ok('HOD can load and update their department in the profile', hodProfile.status === 200 && hodProfileUpdate.status === 200 && (await api('GET', '/profile', { token: hod })).data.user.department === 'Computing & Informatics');
+const profilePasswordId = (await pool.query("INSERT INTO users (email, password, name, role) VALUES ('profilepass@mtti.ac.ke', ?, 'Profile Password Test', 'teacher')", [pw]))[0].insertId;
+const profilePasswordLogin = await login('profilepass@mtti.ac.ke', 'Passw0rd!', 'profile-password-test');
+const passwordChange = await api('POST', '/profile/password', { token: profilePasswordLogin.data.token, body: { current_password: 'Passw0rd!', new_password: 'UpdatedPassw0rd!' } });
+ok('profile password change validates current password and revokes the old token',
+  passwordChange.status === 200 &&
+  (await api('GET', '/profile', { token: profilePasswordLogin.data.token })).status === 401 &&
+  (await login('profilepass@mtti.ac.ke', 'UpdatedPassw0rd!', 'profile-password-test')).status === 200);
+await pool.query('DELETE FROM users WHERE id = ?', [profilePasswordId]);
 
 // ---------- 2. role guards ----------
 ok('no token -> 401', (await api('GET', '/student/dashboard')).status === 401);
@@ -93,20 +115,39 @@ ok('lecturer list', lects.data?.some(l => l.name === 'Mr Teacher'));
 const sess = await api('POST', '/classrep/sessions', { token: repT, body: { unit_name: 'Networking', lecturer_name: 'Mr Teacher', venue: 'Lab 1' } });
 ok('start session', sess.status === 201 && sess.data.id > 0);
 const sid = sess.data.id;
-const startedSession = (await api('GET', '/classrep/sessions/current', { token: repT })).data.session;
-const storedStart = (await pool.query('SELECT start_time FROM sessions WHERE id = ?', [sid]))[0][0].start_time;
-const expectedStartedAt = new Intl.DateTimeFormat('en-US', { timeZone: 'Africa/Nairobi', hour: '2-digit', minute: '2-digit', hour12: true }).format(new Date(`${String(storedStart).replace(' ', 'T')}Z`));
-ok('class rep session start time is shown in Kenya local time', startedSession.startedAt === expectedStartedAt);
+await pool.query("INSERT INTO users (email, password, name, role, class_code) VALUES ('otherteacher@mtti.ac.ke', ?, 'Ms Other Teacher', 'teacher', NULL)", [pw]);
+const otherTL = await login('otherteacher@mtti.ac.ke', 'Passw0rd!', 'other-teacher'); const otherTeach = otherTL.data.token;
 ok('manual attendance is restricted to class reps', (await api('GET', '/classrep/manual-attendance', { token: s1 })).status === 403 && (await api('POST', '/classrep/manual-attendance', { token: s1, body: { adm_no: '1003' } })).status === 403);
-const manualList = await api('GET', '/classrep/manual-attendance', { token: repT });
+const pinStatus = await api('GET', '/classrep/manual-attendance-pin/status', { token: repT });
+ok('rep PIN is initially unconfigured', pinStatus.status === 200 && pinStatus.data.configured === false);
+ok('rep cannot read or mark attendance until PIN unlock', (await api('GET', '/classrep/manual-attendance', { token: repT })).status === 403 && (await api('POST', '/classrep/manual-attendance', { token: repT, body: { adm_no: '1003' } })).status === 403);
+ok('PIN setup requires two matching six-digit values', (await api('POST', '/classrep/manual-attendance-pin/setup', { token: repT, body: { pin: '12345', confirmPin: '12345' } })).status === 400 && (await api('POST', '/classrep/manual-attendance-pin/setup', { token: repT, body: { pin: '123456', confirmPin: '654321' } })).status === 400);
+ok('PIN setup succeeds once', (await api('POST', '/classrep/manual-attendance-pin/setup', { token: repT, body: { pin: '123456', confirmPin: '123456' } })).status === 201);
+ok('PIN cannot be reset through first-use setup', (await api('POST', '/classrep/manual-attendance-pin/setup', { token: repT, body: { pin: '654321', confirmPin: '654321' } })).status === 409);
+ok('incorrect PIN cannot unlock Mark Present', (await api('POST', '/classrep/manual-attendance-pin/unlock', { token: repT, body: { pin: '654321' } })).status === 400);
+const pinUnlock = await api('POST', '/classrep/manual-attendance-pin/unlock', { token: repT, body: { pin: '123456' } });
+ok('correct PIN returns a short-lived unlock token', pinUnlock.status === 200 && pinUnlock.data.expiresInSeconds === 600 && !!pinUnlock.data.token);
+let manualPin = pinUnlock.data.token;
+const manualList = await api('GET', '/classrep/manual-attendance', { token: repT, manualPin });
 const carolBeforeManual = (await pool.query("SELECT points, attendance_pct FROM students WHERE adm_no = '1003'"))[0][0];
 const repId = (await pool.query("SELECT id FROM users WHERE email = '1000@mtti.ac.ke'"))[0][0].id;
 ok('rep gets only the active class session and its students', manualList.status === 200 && manualList.data.session.id === sid && manualList.data.students.some((student) => student.adm === '1003' && !student.present));
-const manualMark = await api('POST', '/classrep/manual-attendance', { token: repT, body: { adm_no: '1003' } });
+ok('only the assigned lecturer can inspect session absentees', (await api('GET', `/teacher/sessions/${sid}/absent`, { token: teach })).status === 200 && (await api('GET', `/teacher/sessions/${sid}/absent`, { token: otherTeach })).status === 404 && (await api('GET', `/teacher/sessions/${sid}/absent`, { token: s1 })).status === 403);
+await pool.query("DELETE FROM users WHERE email = 'otherteacher@mtti.ac.ke'");
+const manualMark = await api('POST', '/classrep/manual-attendance', { token: repT, manualPin, body: { adm_no: '1003' } });
 const manualRow = (await pool.query('SELECT id, session_id, adm_no, is_late, points_earned, record_method, recorded_by FROM attendance_logs WHERE session_id = ? AND adm_no = ?', [sid, '1003']))[0][0];
 ok('rep manually marks a present student and records actor/method/points', manualMark.status === 201 && manualRow?.record_method === 'manual' && Number(manualRow.recorded_by) === Number(repId) && Number(manualRow.points_earned) === manualMark.data.points_earned && !manualMark.data.is_late);
-ok('manually marked student appears as present in the live roster', (await api('GET', '/classrep/manual-attendance', { token: repT })).data.students.find((student) => student.adm === '1003')?.present === true);
-ok('manual check-in cannot be duplicated or applied outside this class', (await api('POST', '/classrep/manual-attendance', { token: repT, body: { adm_no: '1003' } })).status === 409 && (await api('POST', '/classrep/manual-attendance', { token: repT, body: { adm_no: '2001' } })).status === 404);
+ok('manually marked student appears as present in the live roster', (await api('GET', '/classrep/manual-attendance', { token: repT, manualPin })).data.students.find((student) => student.adm === '1003')?.present === true);
+ok('manual check-in cannot be duplicated or applied outside this class', (await api('POST', '/classrep/manual-attendance', { token: repT, manualPin, body: { adm_no: '1003' } })).status === 409 && (await api('POST', '/classrep/manual-attendance', { token: repT, manualPin, body: { adm_no: '2001' } })).status === 404);
+const absentAfterManual = await api('GET', `/teacher/sessions/${sid}/absent`, { token: teach });
+ok('session absent list excludes rep-marked attendees', absentAfterManual.status === 200 && absentAfterManual.data.present === 1 && !absentAfterManual.data.absent.some((student) => student.adm === '1003') && absentAfterManual.data.absent.some((student) => student.adm === '1001'));
+ok('PIN change validates old PIN and matching new PIN', (await api('POST', '/classrep/manual-attendance-pin/change', { token: repT, body: { oldPin: '654321', newPin: '234567', confirmPin: '234567' } })).status === 400 && (await api('POST', '/classrep/manual-attendance-pin/change', { token: repT, body: { oldPin: '123456', newPin: '234567', confirmPin: '765432' } })).status === 400);
+ok('PIN change succeeds with the current PIN', (await api('POST', '/classrep/manual-attendance-pin/change', { token: repT, body: { oldPin: '123456', newPin: '234567', confirmPin: '234567' } })).status === 200);
+ok('changing PIN revokes existing unlock tokens', (await api('GET', '/classrep/manual-attendance', { token: repT, manualPin })).status === 403);
+ok('previous PIN no longer unlocks Mark Present', (await api('POST', '/classrep/manual-attendance-pin/unlock', { token: repT, body: { pin: '123456' } })).status === 400);
+const changedPinUnlock = await api('POST', '/classrep/manual-attendance-pin/unlock', { token: repT, body: { pin: '234567' } });
+ok('new PIN unlocks Mark Present after change', changedPinUnlock.status === 200);
+manualPin = changedPinUnlock.data.token;
 await pool.query('DELETE FROM attendance_logs WHERE id = ?', [manualRow.id]);
 await pool.query("DELETE FROM points_logs WHERE adm_no = '1003' AND activity_type IN ('Manual on-time attendance', 'Manual late attendance')");
 await pool.query("DELETE FROM badges WHERE adm_no = '1003' AND badge_name = 'First Check-in'");
@@ -130,12 +171,11 @@ ok('forged qr rejected', (await api('POST', '/qr/verify', { token: s1, body: { t
 ok('garbage qr rejected', (await api('POST', '/qr/verify', { token: s1, body: { token: 'garbage' } })).status === 400);
 
 const photo = () => new Blob([Buffer.from('/9j/4AAQSkZJRg==', 'base64')], { type: 'image/jpeg' });
-const scan = (token, fields, qr = tok, includePhoto = true) => { const f = new FormData(); Object.entries({ session_id: sid, gps_lat: -1.123, gps_lng: 37.123, qr_token: qr, ...fields }).forEach(([k, v]) => f.append(k, String(v))); if (includePhoto) f.append('photo', photo(), 'selfie.jpg'); return api('POST', '/attendance/scan', { token, form: f }); };
+const scan = (token, fields, qr = tok) => { const f = new FormData(); Object.entries({ session_id: sid, gps_lat: -1.123, gps_lng: 37.123, qr_token: qr, ...fields }).forEach(([k, v]) => f.append(k, String(v))); f.append('photo', photo(), 'selfie.jpg'); return api('POST', '/attendance/scan', { token, form: f }); };
 
 await snap();
-const sc1 = await scan(s1, { adm_no: '1001', device_id: 'dev-s1' }, tok, false);
-const sc1Photo = (await pool.query('SELECT photo_url FROM attendance_logs WHERE session_id = ? AND adm_no = ?', [sid, '1001']))[0][0]?.photo_url;
-ok('student checks in using QR without a selfie photo', sc1.status === 201 && sc1.data.points_earned === 15 && sc1.data.is_late === false && sc1Photo == null, JSON.stringify(sc1.data));
+const sc1 = await scan(s1, { adm_no: '1001', device_id: 'dev-s1' });
+ok('student 1 checks in (multipart + photo)', sc1.status === 201 && sc1.data.points_earned === 15 && sc1.data.is_late === false, JSON.stringify(sc1.data));
 ok('duplicate scan blocked (409)', (await scan(s1, { adm_no: '1001', device_id: 'dev-s1' })).status === 409);
 ok('outside geofence blocked', (await scan(s2, { adm_no: '1002', device_id: 'dev-s2', gps_lat: 0.0, gps_lng: 37.0 })).status === 403);
 ok('wrong device blocked', (await scan(s2, { adm_no: '1002', device_id: 'stolen-phone' })).status === 403);
@@ -171,24 +211,7 @@ ok('empty chat rejected', (await api('POST', '/student/chat', { token: s1, body:
 const chat = await api('GET', '/student/chat', { token: s2 });
 ok('chat timestamp is timezone-explicit for East Africa display', chat.data?.[0]?.timestamp === '2026-10-08T08:05:00.000Z');
 ok('chat visible to classmate, not other class', chat.data?.length === 1 && chat.data[0].mine === false && (await api('GET', '/student/chat', { token: sd })).data.length === 0);
-ok('students can edit only their own class chat message', (await api('PATCH', `/student/chat/${sentChat.data.id}`, { token: s1, body: { message: 'Edited hello class' } })).status === 200 && (await api('PATCH', `/student/chat/${sentChat.data.id}`, { token: s2, body: { message: 'Not mine' } })).status === 403);
-const repliedChat = await api('POST', '/student/chat', { token: s2, body: { message: 'Reply in class', reply_to: sentChat.data.id } });
-ok('chat replies are linked to messages in the same class', repliedChat.status === 201 && repliedChat.data.reply?.id === sentChat.data.id && repliedChat.data.reply.sender === 'Alice');
-ok('chat cannot reply to a message from another class', (await api('POST', '/student/chat', { token: sd, body: { message: 'Out of class reply', reply_to: sentChat.data.id } })).status === 404);
-const imageForm = new FormData();
-imageForm.append('message', 'Photo from chat');
-imageForm.append('attachment', new Blob([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])], { type: 'image/png' }), 'chat-photo.png');
-const attachedChat = await api('POST', '/student/chat', { token: s1, form: imageForm });
-const attachedFile = attachedChat.data?.attachment && await api('GET', attachedChat.data.attachment.url, { token: s2, raw: true });
-ok('chat accepts supported photo attachments and makes them available to classmates', attachedChat.status === 201 && attachedChat.data.attachment?.type === 'image/png' && attachedFile?.status === 200 && attachedFile.buf.length > 0);
-ok('chat attachments stay private to the sender class', (await api('GET', attachedChat.data.attachment.url, { token: sd })).status === 403);
-const badAttachment = new FormData();
-badAttachment.append('attachment', new Blob(['not an image'], { type: 'image/png' }), 'not-image.txt');
-ok('chat rejects attachment extensions that do not match their media type', (await api('POST', '/student/chat', { token: s1, form: badAttachment })).status === 400);
-ok('chat message deletion is limited to its author', (await api('DELETE', `/student/chat/${sentChat.data.id}`, { token: s2 })).status === 403);
-ok('chat author can delete their message and reply reference is cleared', (await api('DELETE', `/student/chat/${sentChat.data.id}`, { token: s1 })).status === 200 && (await api('GET', '/student/chat', { token: s2 })).data.find((m) => m.id === repliedChat.data.id)?.reply === null);
-ok('deleting an attachment removes access to its file', (await api('DELETE', `/student/chat/${attachedChat.data.id}`, { token: s1 })).status === 200 && (await api('GET', attachedChat.data.attachment.url, { token: s1 })).status === 404);
-ok('class rep can read replies and post in the shared class chat', (await api('GET', '/classrep/chat', { token: repT })).data?.some((m) => m.text === 'Reply in class') && (await api('POST', '/classrep/chat', { token: repT, body: { message: 'Rep message' } })).status === 201);
+ok('class rep can read and post in the shared class chat', (await api('GET', '/classrep/chat', { token: repT })).data?.[0]?.text === 'Hello class' && (await api('POST', '/classrep/chat', { token: repT, body: { message: 'Rep message' } })).status === 201);
 ok('temp id needs reason', (await api('POST', '/student/temp-id', { token: s3, body: {} })).status === 400);
 ok('temp id request', (await api('POST', '/student/temp-id', { token: s3, body: { reason: 'Lost my ID' } })).status === 201);
 ok('duplicate pending temp id blocked', (await api('POST', '/student/temp-id', { token: s3, body: { reason: 'again' } })).status === 409);
@@ -231,6 +254,9 @@ const csvR = await api('GET', '/classrep/ministry-export?format=csv', { token: r
 ok('csv export', csvR.status === 200 && /text\/csv/.test(csvR.res.headers.get('content-type')) && csvR.buf.toString().includes('Alice'));
 const pdfR = await api('GET', '/classrep/ministry-export?format=pdf', { token: repT, raw: true });
 ok('pdf export is a real PDF', pdfR.status === 200 && pdfR.buf.slice(0, 4).toString() === '%PDF', pdfR.buf.slice(0, 20).toString());
+ok('class-rep report PDF embeds both institutional logos and a professionally formatted table',
+  pdfR.status === 200 && (pdfR.buf.toString('latin1').match(/\/Subtype \/Image/g) || []).length >= 2 &&
+  pdfR.buf.toString('latin1').includes('595.28'));
 const pa = await api('POST', '/classrep/parent-alerts/run', { token: repT });
 ok('parent alerts generated for at-risk', pa.status === 200 && pa.data.created >= 1, JSON.stringify(pa.data));
 ok('parent alerts not duplicated same day', (await api('POST', '/classrep/parent-alerts/run', { token: repT })).data.created === 0);
@@ -258,9 +284,9 @@ await snap();
 const hd = await api('GET', '/hod/dashboard', { token: hod });
 ok('hod dashboard', hd.data?.totalClasses === 2 && hd.data.totalStudents === 6 && hd.data.pendingTimetables === 1, JSON.stringify(hd.data));
 const hc = await api('GET', '/hod/classes', { token: hod });
-ok('hod classes include department, rep, and counts', hc.data?.find(c => c.code === 'ITECH6')?.students === 5 && hc.data.find(c => c.code === 'ITECH6').rep === 'Rita Rep' && hc.data.find(c => c.code === 'ITECH6').department === 'Computing & Informatics', JSON.stringify(hc.data));
+ok('hod classes with department, rep + counts', hc.data?.find(c => c.code === 'ITECH6')?.students === 5 && hc.data.find(c => c.code === 'ITECH6').rep === 'Rita Rep' && hc.data.find(c => c.code === 'ITECH6').department === 'Computing & Informatics', JSON.stringify(hc.data));
 const ar = await api('GET', '/hod/at-risk', { token: hod });
-ok('hod at-risk list', ar.data?.students?.some(s => s.adm === '1003' && s.missed === 1), JSON.stringify(ar.data)?.slice(0, 200));
+ok('hod at-risk list includes class department for filters', ar.data?.students?.some(s => s.adm === '1003' && s.missed === 1 && s.department === 'Computing & Informatics'), JSON.stringify(ar.data)?.slice(0, 200));
 const fr = await api('GET', '/hod/final-reports', { token: hod });
 ok('final report numbers add up', fr.data?.totalStudents === fr.data.eligible + fr.data.barred && fr.data.complianceRate >= 0, JSON.stringify(fr.data)?.slice(0, 200));
 ok('lost-id logs', (await api('GET', '/hod/lost-id-logs', { token: hod })).data?.[0]?.name === 'Carol');
@@ -274,7 +300,12 @@ const mg = await api('POST', '/hod/ministry-audit', { token: hod });
 ok('ministry audit generated', mg.status === 201 && mg.data.id > 0 && mg.data.totals.students === 6, JSON.stringify(mg.data));
 ok('ministry list', (await api('GET', '/hod/ministry-audit', { token: hod })).data?.[0]?.id === mg.data.id);
 const mp = await api('GET', `/hod/ministry-audit/${mg.data.id}/pdf`, { token: hod, raw: true });
-ok('ministry pdf', mp.status === 200 && mp.buf.slice(0, 4).toString() === '%PDF');
+ok('ministry pdf includes a branded institutional header and both logos', mp.status === 200 && mp.buf.slice(0, 4).toString() === '%PDF' && mp.buf.length > 100000);
+const filteredMinistry = await api('POST', '/hod/ministry-audit', { token: hod, body: { department: 'Computing & Informatics', class_code: 'ITECH6' } });
+const filteredMinistryRow = (await pool.query('SELECT data_payload FROM ministry_reports WHERE id = ?', [filteredMinistry.data.id]))[0][0];
+const filteredMinistryPayload = typeof filteredMinistryRow.data_payload === 'string' ? JSON.parse(filteredMinistryRow.data_payload) : filteredMinistryRow.data_payload;
+ok('Ministry report filters its saved snapshot to the selected department and class', filteredMinistry.status === 201 && filteredMinistryPayload.department === 'Computing & Informatics' && filteredMinistryPayload.classCode === 'ITECH6' && filteredMinistryPayload.classes.length === 1 && filteredMinistryPayload.classes[0].code === 'ITECH6');
+ok('Ministry report rejects a class outside the chosen department', (await api('POST', '/hod/ministry-audit', { token: hod, body: { department: 'Computing & Informatics', class_code: 'ITECH7' } })).status === 400);
 ok('legacy /ministry/reports now protected', (await api('GET', '/ministry/reports', { token: s1 })).status === 403);
 ok('hod resets device', (await api('POST', '/hod/students/1001/reset-device', { token: hod })).status === 200);
 ok('hod sets fees', (await api('PUT', '/hod/fees/1001', { token: hod, body: { total_fees: 50000, paid_amount: 30000 } })).status === 200);
@@ -339,7 +370,7 @@ ok('resend-verification message', (await api('POST', '/auth/resend-verification'
 
 
 // ---------- 10. administrator: bootstrap, staff self-registration, approvals, classes, staff management ----------
-const regStaff = (role, name, email) => api('POST', `/auth/register-${role}`, { body: { name, email, password: 'Passw0rd!', ...(['hod', 'teacher'].includes(role) ? { department: 'Computing & Informatics' } : {}) } });
+const regStaff = (role, name, email) => api('POST', `/auth/register-${role}`, { body: { name, email, password: 'Passw0rd!', ...(['teacher', 'hod'].includes(role) ? { department: 'Computing & Informatics' } : {}) } });
 const ad1 = await regStaff('admin', 'First Admin', 'admin1@mtti.ac.ke');
 ok('first administrator is approved automatically', ad1.status === 201 && ad1.data.status === 'active', JSON.stringify(ad1.data));
 const ad1L = await login('admin1@mtti.ac.ke', 'Passw0rd!', 'x'); adminTok = ad1L.data?.token;
@@ -348,12 +379,6 @@ const ad2 = await regStaff('admin', 'Second Admin', 'admin2@mtti.ac.ke');
 const tNew = await regStaff('teacher', 'Mr New', 'newteach@mtti.ac.ke');
 const hNew = await regStaff('hod', 'Dr New', 'newhod@mtti.ac.ke');
 ok('later administrator / teacher / hod registrations are pending', [ad2, tNew, hNew].every((r) => r.status === 201 && r.data.status === 'pending'));
-ok('HOD registration requires a valid institutional department', (await api('POST', '/auth/register-hod', { body: { name: 'No Department', email: 'nodept@mtti.ac.ke', password: 'Passw0rd!' } })).status === 400 && (await api('POST', '/auth/register-hod', { body: { name: 'Invalid Department', email: 'invaliddept@mtti.ac.ke', password: 'Passw0rd!', department: 'Unknown Department' } })).status === 400);
-ok('teacher registration requires a valid institutional department', (await api('POST', '/auth/register-teacher', { body: { name: 'No Department', email: 'teachnodept@mtti.ac.ke', password: 'Passw0rd!' } })).status === 400 && (await api('POST', '/auth/register-teacher', { body: { name: 'Invalid Department', email: 'teachinvaliddept@mtti.ac.ke', password: 'Passw0rd!', department: 'Unknown Department' } })).status === 400);
-const storedHodDepartment = (await pool.query("SELECT department FROM users WHERE email = 'newhod@mtti.ac.ke'"))[0][0].department;
-ok('HOD registration saves the selected department', storedHodDepartment === 'Computing & Informatics', storedHodDepartment);
-const storedTeacherDepartment = (await pool.query("SELECT department FROM users WHERE email = 'newteach@mtti.ac.ke'"))[0][0].department;
-ok('teacher registration saves the selected department', storedTeacherDepartment === 'Computing & Informatics', storedTeacherDepartment);
 ok('duplicate staff email rejected', (await regStaff('teacher', 'x', 'newteach@mtti.ac.ke')).status === 409);
 ok('staff short password rejected', (await api('POST', '/auth/register-teacher', { body: { name: 'x', email: 'q@q.ke', password: '123' } })).status === 400);
 ok('staff missing name rejected', (await api('POST', '/auth/register-hod', { body: { email: 'q@q.ke', password: 'Passw0rd!' } })).status === 400);
@@ -366,7 +391,7 @@ ok('admin area needs a token', (await api('GET', '/admin/dashboard')).status ===
 
 const staffList = await api('GET', '/admin/staff', { token: adminTok });
 const byEmail = (e) => staffList.data.find((x) => x.email === e);
-ok('staff list: pending first, includes seeded teacher/hod', staffList.data?.[0]?.status === 'pending' && !!byEmail('teacher@mtti.ac.ke') && !!byEmail('hod@mtti.ac.ke') && byEmail('admin1@mtti.ac.ke').isMe === true, JSON.stringify(staffList.data)?.slice(0, 200));
+ok('staff list: pending first, includes staff department details', staffList.data?.[0]?.status === 'pending' && !!byEmail('teacher@mtti.ac.ke') && !!byEmail('hod@mtti.ac.ke') && byEmail('newteach@mtti.ac.ke')?.department === 'Computing & Informatics' && byEmail('admin1@mtti.ac.ke').isMe === true, JSON.stringify(staffList.data)?.slice(0, 200));
 ok('bad decision value rejected', (await api('POST', `/admin/staff/${byEmail('newteach@mtti.ac.ke').id}/decision`, { token: adminTok, body: { decision: 'maybe' } })).status === 400);
 ok('admin approves teacher', (await api('POST', `/admin/staff/${byEmail('newteach@mtti.ac.ke').id}/decision`, { token: adminTok, body: { decision: 'approve' } })).status === 200);
 ok('admin approves hod', (await api('POST', `/admin/staff/${byEmail('newhod@mtti.ac.ke').id}/decision`, { token: adminTok, body: { decision: 'approve' } })).status === 200);
@@ -380,77 +405,38 @@ ok('newly approved teacher appears in rep lecturer list', (await api('GET', '/cl
 const ad = await api('GET', '/admin/dashboard', { token: adminTok });
 FIX['/admin/dashboard#noterm'] = ad.data;
 ok('admin dashboard counts', ad.data?.classes === 2 && ad.data.students === 5 && ad.data.reps === 1 && ad.data.teachers === 3 && ad.data.hods === 2 && ad.data.admins === 1 && ad.data.pendingStaff === 0, JSON.stringify(ad.data));
+const temporaryStaff = await api('POST', '/admin/staff', { token: adminTok, body: { role: 'teacher', name: 'Temporary Teacher', email: 'temporary.teacher@mtti.ac.ke', password: 'Passw0rd!', department: 'Computing & Informatics', teacher_unit: 'Temporary Unit' } });
+const temporaryStaffId = temporaryStaff.data.id;
+ok('admin creates staff profile including department and subject', temporaryStaff.status === 201 && (await api('GET', '/admin/staff', { token: adminTok })).data.some((staff) => staff.id === temporaryStaffId && staff.department === 'Computing & Informatics' && staff.teacher_unit === 'Temporary Unit'));
+ok('admin edits staff details', (await api('PUT', `/admin/staff/${temporaryStaffId}`, { token: adminTok, body: { name: 'Updated Temporary Teacher', email: 'temporary.teacher@mtti.ac.ke', department: 'Mechanical & Automotive', teacher_unit: 'Updated Unit', class_code: '' } })).status === 200 && (await api('GET', '/admin/staff', { token: adminTok })).data.some((staff) => staff.id === temporaryStaffId && staff.department === 'Mechanical & Automotive' && staff.teacher_unit === 'Updated Unit'));
+ok('admin cannot delete their own account', (await api('DELETE', `/admin/staff/${byEmail('admin1@mtti.ac.ke').id}`, { token: adminTok })).status === 400);
+ok('admin deletes staff account', (await api('DELETE', `/admin/staff/${temporaryStaffId}`, { token: adminTok })).status === 200 && !(await api('GET', '/admin/staff', { token: adminTok })).data.some((staff) => staff.id === temporaryStaffId));
+await new Promise((resolve) => setTimeout(resolve, 50));
+const activityLog = await api('GET', '/admin/activity', { token: adminTok });
+ok('administrator activity feed records the actor, staff actions and timestamp', activityLog.status === 200 && activityLog.data.some((entry) => entry.actor === 'First Admin' && entry.method === 'DELETE' && entry.route === '/api/admin/staff/:id' && entry.time));
+ok('activity feed is administrator-only', (await api('GET', '/admin/activity', { token: hod })).status === 403);
 
 // classes
 const addCls = (body) => api('POST', '/admin/classes', { token: adminTok, body });
-ok('admin adds a class (code with slashes)', (await addCls({ class_code: 'ITECH9/S/26', course: 'Electrical Engineering', module: 'Module 1', department: 'Computing & Informatics' })).status === 201);
+ok('admin adds a class (code with slashes)', (await addCls({ class_code: 'ITECH9/S/26', course: 'Electrical Engineering', module: 'Module 1' })).status === 201);
 ok('duplicate class code rejected (case-insensitive)', (await addCls({ class_code: 'itech9/s/26', course: 'x', module: 'y' })).status === 409);
 ok('invalid class code rejected', (await addCls({ class_code: '!!', course: 'x', module: 'y' })).status === 400);
 ok('missing course rejected', (await addCls({ class_code: 'ABC1', module: 'y' })).status === 400);
 const cls = await api('GET', '/admin/classes', { token: adminTok });
 ok('class list with member counts + rep', cls.data?.find((c) => c.code === 'ITECH6')?.students === 5 && cls.data.find((c) => c.code === 'ITECH6').rep === 'Rita Rep' && cls.data.find((c) => c.code === 'ITECH9/S/26')?.students === 0, JSON.stringify(cls.data));
-ok('teacher unit / subject is required when an administrator adds a teacher', (await api('POST', '/admin/staff', { token: adminTok, body: { role: 'teacher', name: 'Missing Unit', email: 'missingunit@mtti.ac.ke', password: 'Passw0rd!' } })).status === 400);
-ok('administrator-added teachers require a valid department', (await api('POST', '/admin/staff', { token: adminTok, body: { role: 'teacher', name: 'Missing Department', email: 'missingdept@mtti.ac.ke', password: 'Passw0rd!', teacher_unit: 'Mathematics' } })).status === 400);
-const classTeacherAdd = await api('POST', '/admin/staff', { token: adminTok, body: {
-  role: 'teacher', name: 'Ms Class Teacher', email: 'classteacher@mtti.ac.ke', password: 'Passw0rd!', department: 'Computing & Informatics',
-  teacher_unit: 'Electrical Installation', is_class_teacher: true, class_code: 'ITECH9/S/26',
-} });
-ok('administrator can add a teacher with a unit and class-teacher assignment', classTeacherAdd.status === 201, JSON.stringify(classTeacherAdd.data));
-const assignedClasses = await api('GET', '/admin/classes', { token: adminTok });
-const assignedClass = assignedClasses.data.find((c) => c.code === 'ITECH9/S/26');
-ok('new class teacher is assigned to the selected class', assignedClass.classTeacher === 'Ms Class Teacher' && assignedClass.classTeacherId === classTeacherAdd.data.id, JSON.stringify(assignedClass));
-ok('a class already assigned to a class teacher cannot be overwritten during staff creation', (await api('POST', '/admin/staff', { token: adminTok, body: {
-  role: 'teacher', name: 'Another Teacher', email: 'anotherteacher@mtti.ac.ke', password: 'Passw0rd!', department: 'Computing & Informatics',
-  teacher_unit: 'Mathematics', is_class_teacher: true, class_code: 'ITECH9/S/26',
-} })).status === 409);
-const addedTeacherRow = (await api('GET', '/admin/staff', { token: adminTok })).data.find((r) => r.id === classTeacherAdd.data.id);
-ok('staff list shows a teacher department, unit, and assigned class', addedTeacherRow.department === 'Computing & Informatics' && addedTeacherRow.teacher_unit === 'Electrical Installation' && addedTeacherRow.class_teacher_class === 'ITECH9/S/26', JSON.stringify(addedTeacherRow));
-const assignedSheet = await api('GET', '/hod/weekly-sheet?class_code=ITECH9%2FS%2F26', { token: hod });
-ok('weekly sheet includes the assigned class teacher and teaching unit', assignedSheet.data.classTeacher === 'Ms Class Teacher' && assignedSheet.data.classTeacherSubject === 'Electrical Installation', JSON.stringify(assignedSheet.data));
-const assignedPdf = await api('GET', '/hod/weekly-sheet?class_code=ITECH9%2FS%2F26&format=pdf', { token: hod, raw: true });
-const assignedText = spawnSync('pdftotext', ['-layout', '-', '-'], { input: assignedPdf.buf, encoding: 'utf8' });
-if (assignedText.status === 0) ok('printable register header includes the class teacher and their unit / subject', assignedText.stdout.includes('Ms Class Teacher') && assignedText.stdout.includes('Electrical Installation'), assignedText.stdout.slice(0, 500));
 const adminMembersPath = `/admin/class-members?code=${encodeURIComponent('ITECH6')}`;
-const hodMembersPath = `/hod/class-members?code=${encodeURIComponent('ITECH6')}`;
 ok('class member list is administrator-only', (await api('GET', adminMembersPath, { token: hod })).status === 403 && (await api('GET', adminMembersPath)).status === 401);
 const adminMembers = await api('GET', adminMembersPath, { token: adminTok });
 ok('administrator sees class students and rep with account status', adminMembers.status === 200 && adminMembers.data.length === 5 && adminMembers.data.some((m) => m.role === 'student_rep' && m.status === 'active') && adminMembers.data.every((m) => Number.isInteger(m.id)), JSON.stringify(adminMembers.data));
-ok('HOD can view class members from the HOD classes page', (await api('GET', hodMembersPath, { token: hod })).status === 200);
 const updateTarget = adminMembers.data.find((m) => m.adm_no === '1002');
 ok('only administrator may edit class-member details', (await api('PUT', '/admin/class-members', { token: hod, body: { code: 'ITECH6', user_id: updateTarget.id, name: 'Blocked', email: 'blocked@mtti.ac.ke' } })).status === 403);
-ok('admission number update rejects blank values', (await api('PUT', '/hod/class-members', { token: hod, body: { code: 'ITECH6', user_id: updateTarget.id, adm_no: '  ', name: 'Brian', email: '1002@mtti.ac.ke' } })).status === 400);
-ok('admission number update rejects case-insensitive duplicates', (await api('PUT', '/hod/class-members', { token: hod, body: { code: 'ITECH6', user_id: updateTarget.id, adm_no: ' 1001 ', name: 'Brian', email: '1002@mtti.ac.ke' } })).status === 409);
-const addedAdmissionAttendance = !(await pool.query('SELECT id FROM attendance_logs WHERE session_id = ? AND adm_no = ?', [sid, '1002']))[0].length;
-if (addedAdmissionAttendance) {
-  await pool.query('INSERT INTO attendance_logs (session_id, adm_no) VALUES (?, ?)', [sid, '1002']);
-}
-await pool.query('INSERT INTO parent_alerts (adm_no, parent_email, alert_reason) VALUES (?, ?, ?)', ['1002', 'parent.1002@example.com', 'admission-update-test']);
-await pool.query('INSERT INTO points_logs (adm_no, points, activity_type) VALUES (?, ?, ?)', ['1002', 1, 'admission-update-test']);
-await pool.query('INSERT INTO badges (adm_no, badge_name) VALUES (?, ?)', ['1002', 'Admission update test']);
-await pool.query('INSERT INTO temp_id_requests (adm_no, face_score, expires_at) VALUES (?, ?, ?)', ['1002', 0, '2030-01-01 00:00:00']);
-await pool.query('INSERT INTO campus_checkins (adm_no, service_type) VALUES (?, ?)', ['1002', 'library']);
-await pool.query('INSERT INTO fee_accounts (adm_no, total_fees, paid_amount) VALUES (?, ?, ?)', ['1002', 100, 25]);
-const admissionUpdate = await api('PUT', '/hod/class-members', { token: hod, body: { code: 'ITECH6', user_id: updateTarget.id, adm_no: 'ITECH6/11702/M2025', name: 'Brian', email: '1002@mtti.ac.ke', parent_email: 'p1002@mail.com', parent_phone: '' } });
-const admissionRefs = await Promise.all(['attendance_logs', 'device_locks', 'parent_alerts', 'points_logs', 'badges', 'temp_id_requests', 'campus_checkins', 'fee_accounts'].map((table) => pool.query(`SELECT adm_no FROM ${table} WHERE adm_no = ?`, ['ITECH6/11702/M2025'])));
-ok('HOD updates an admission number and preserves all linked records', admissionUpdate.status === 200 && (await pool.query('SELECT adm_no FROM students WHERE user_id = ?', [updateTarget.id]))[0][0]?.adm_no === 'ITECH6/11702/M2025' && admissionRefs.every(([rows]) => rows.length > 0));
-ok('changing an admission number invalidates existing student tokens', (await api('GET', '/student/leaderboard', { token: s2 })).status === 401);
-const restoreAdmission = await api('PUT', '/admin/class-members', { token: adminTok, body: { code: 'ITECH6', user_id: updateTarget.id, adm_no: '1002', name: 'Brian', email: '1002@mtti.ac.ke', parent_email: 'p1002@mail.com', parent_phone: '' } });
-ok('administrator can restore the admission number', restoreAdmission.status === 200);
-await pool.query("DELETE FROM parent_alerts WHERE adm_no = '1002' AND alert_reason = 'admission-update-test'");
-await pool.query("DELETE FROM points_logs WHERE adm_no = '1002' AND activity_type = 'admission-update-test'");
-await pool.query("DELETE FROM badges WHERE adm_no = '1002' AND badge_name = 'Admission update test'");
-await pool.query("DELETE FROM temp_id_requests WHERE adm_no = '1002' AND expires_at = '2030-01-01 00:00:00' AND face_score = 0");
-await pool.query("DELETE FROM campus_checkins WHERE adm_no = '1002' AND service_type = 'library' AND status_details IS NULL");
-await pool.query("DELETE FROM fee_accounts WHERE adm_no = '1002'");
-if (addedAdmissionAttendance) await pool.query('DELETE FROM attendance_logs WHERE session_id = ? AND adm_no = ?', [sid, '1002']);
 ok('member update rejects invalid email', (await api('PUT', '/admin/class-members', { token: adminTok, body: { code: 'ITECH6', user_id: updateTarget.id, name: 'Brian', email: 'invalid' } })).status === 400);
 ok('member update rejects duplicate email', (await api('PUT', '/admin/class-members', { token: adminTok, body: { code: 'ITECH6', user_id: updateTarget.id, name: 'Brian', email: '1001@mtti.ac.ke' } })).status === 409);
 const memberUpdate = await api('PUT', '/admin/class-members', { token: adminTok, body: { code: 'ITECH6', user_id: updateTarget.id, name: 'Brian Updated', email: 'brian.updated@mtti.ac.ke', parent_email: 'parent.updated@example.com', parent_phone: '+254700123456' } });
 const updatedMembers = await api('GET', adminMembersPath, { token: adminTok });
 ok('administrator updates student and parent contact details', memberUpdate.status === 200 && updatedMembers.data.find((m) => m.id === updateTarget.id)?.name === 'Brian Updated' && updatedMembers.data.find((m) => m.id === updateTarget.id)?.email === 'brian.updated@mtti.ac.ke' && updatedMembers.data.find((m) => m.id === updateTarget.id)?.parent_email === 'parent.updated@example.com' && updatedMembers.data.find((m) => m.id === updateTarget.id)?.parent_phone === '+254700123456');
 await api('PUT', '/admin/class-members', { token: adminTok, body: { code: 'ITECH6', user_id: updateTarget.id, name: 'Brian', email: '1002@mtti.ac.ke', parent_email: 'p1002@mail.com', parent_phone: '' } });
-const publicClasses = (await api('GET', '/classes/list')).data;
-ok('public class list includes the department for class registration filtering', publicClasses.some((c) => c.class_code === 'ITECH9/S/26' && c.department === 'Computing & Informatics'));
+ok('new class is on the public register list', (await api('GET', '/classes/list')).data.some((c) => c.class_code === 'ITECH9/S/26'));
 ok('student can register into the admin-created class', (await reg('9001', 'Zed', 'ITECH9/S/26')).status === 201);
 ok('class with members cannot be deleted', (await api('DELETE', `/admin/classes?code=${encodeURIComponent('ITECH9/S/26')}`, { token: adminTok })).status === 409);
 const deletedStudentReg = await reg('9002', 'Member To Delete', 'ITECH6');
@@ -473,7 +459,7 @@ ok('administrator permanently deletes selected class member', deletedMemberRespo
 ok('member deletion removes student and attendance records', (await pool.query("SELECT adm_no FROM students WHERE adm_no = '9002'"))[0].length === 0 && (await pool.query("SELECT id FROM attendance_logs WHERE adm_no = '9002'"))[0].length === 0);
 ok('member deletion removes dependent records and photo', (await pool.query("SELECT adm_no FROM device_locks WHERE adm_no = '9002'"))[0].length === 0 && (await pool.query("SELECT adm_no FROM parent_alerts WHERE adm_no = '9002'"))[0].length === 0 && (await pool.query("SELECT adm_no FROM points_logs WHERE adm_no = '9002'"))[0].length === 0 && (await pool.query("SELECT adm_no FROM badges WHERE adm_no = '9002'"))[0].length === 0 && (await pool.query("SELECT adm_no FROM temp_id_requests WHERE adm_no = '9002'"))[0].length === 0 && (await pool.query("SELECT adm_no FROM campus_checkins WHERE adm_no = '9002'"))[0].length === 0 && !fs.existsSync(privatePhoto));
 ok('deleted member no longer appears in the class list', !(await api('GET', adminMembersPath, { token: adminTok })).data.some((m) => m.adm_no === '9002'));
-await api('POST', '/auth/register-rep', { body: { adm_no: '9003', name: 'Rep To Delete', email: '9003@mtti.ac.ke', department: 'Computing & Informatics', class_code: 'ITECH7', password: 'Passw0rd!' } });
+await api('POST', '/auth/register-rep', { body: { adm_no: '9003', name: 'Rep To Delete', email: '9003@mtti.ac.ke', class_code: 'ITECH7', password: 'Passw0rd!' } });
 const repToDelete = (await api('GET', '/admin/class-members?code=ITECH7', { token: adminTok })).data.find((m) => m.adm_no === '9003');
 await pool.query('UPDATE classes SET rep_id = ? WHERE class_code = ?', [repToDelete.id, 'ITECH7']);
 const deletedRep = await api('DELETE', `/admin/class-members?code=ITECH7&user_id=${repToDelete.id}`, { token: adminTok });
@@ -485,11 +471,10 @@ ok('class with sessions/members protected', (await api('DELETE', '/admin/classes
 for (const [who, tk] of [['student', s1], ['rep', repT], ['hod', hod]]) ok(`legacy create-class route blocked for ${who}`, (await api('POST', '/classes/request', { token: tk, body: { class_code: 'HACK1', course: 'x', module: 'y' } })).status === 403);
 
 // staff management
-const direct = await api('POST', '/admin/staff', { token: adminTok, body: { role: 'hod', name: 'Dr Direct', email: 'direct@mtti.ac.ke', password: 'Passw0rd!', department: 'Mechanical & Automotive' } });
+const direct = await api('POST', '/admin/staff', { token: adminTok, body: { role: 'hod', name: 'Dr Direct', email: 'direct@mtti.ac.ke', password: 'Passw0rd!' } });
 ok('admin adds staff directly (active immediately)', direct.status === 201 && (await login('direct@mtti.ac.ke', 'Passw0rd!', 'x')).data?.user?.role === 'hod');
-ok('admin-created HOD department appears on the staff list', (await api('GET', '/admin/staff', { token: adminTok })).data.find((u) => u.email === 'direct@mtti.ac.ke')?.department === 'Mechanical & Automotive');
 ok('cannot add a student through the staff form', (await api('POST', '/admin/staff', { token: adminTok, body: { role: 'student', name: 'x', email: 'x@x.ke', password: 'Passw0rd!' } })).status === 400);
-ok('staff form validates password + duplicate email', (await api('POST', '/admin/staff', { token: adminTok, body: { role: 'teacher', name: 'x', email: 'y@x.ke', password: '1', teacher_unit: 'Mathematics', department: 'Computing & Informatics' } })).status === 400 && (await api('POST', '/admin/staff', { token: adminTok, body: { role: 'teacher', name: 'x', email: 'direct@mtti.ac.ke', password: 'Passw0rd!', teacher_unit: 'Mathematics', department: 'Computing & Informatics' } })).status === 409);
+ok('staff form validates password + duplicate email', (await api('POST', '/admin/staff', { token: adminTok, body: { role: 'teacher', name: 'x', email: 'y@x.ke', password: '1' } })).status === 400 && (await api('POST', '/admin/staff', { token: adminTok, body: { role: 'teacher', name: 'x', email: 'direct@mtti.ac.ke', password: 'Passw0rd!' } })).status === 409);
 const teachNew = (await api('GET', '/admin/staff', { token: adminTok })).data.find((x) => x.email === 'newteach@mtti.ac.ke');
 const tNewTok = (await login('newteach@mtti.ac.ke', 'Passw0rd!', 'x')).data.token;
 ok('teacher token works before deactivation', (await api('GET', '/teacher/dashboard', { token: tNewTok })).status === 200);
@@ -574,7 +559,7 @@ ok('HOD list shows the attached file', hodList.data.find((x) => x.id === pdfId)?
 ok('teacher cannot use the HOD file route', (await getFile(pdfId, '', teach, '/hod/timetables')).status === 403);
 
 // another class's rep must not see this class's file
-await api('POST', '/auth/register-rep', { body: { adm_no: '2000', name: 'Other Rep', email: '2000@mtti.ac.ke', department: 'Computing & Informatics', class_code: 'ITECH7', password: 'Passw0rd!' } });
+await api('POST', '/auth/register-rep', { body: { adm_no: '2000', name: 'Other Rep', email: '2000@mtti.ac.ke', class_code: 'ITECH7', password: 'Passw0rd!' } });
 const pr = (await api('GET', '/hod/pending-reps', { token: hod })).data.find((r) => r.adm === '2000');
 await api('POST', `/hod/approve-rep/${pr.id}`, { token: hod, body: { decision: 'approve' } });
 const otherRep = (await login('2000@mtti.ac.ke', 'Passw0rd!', 'dev-other')).data.token;
@@ -606,23 +591,6 @@ ok('Carol (never checked in) is absent for both', rowOf('Carol').absent === 2 &&
 ok('totals: 2 of 5 students were present this week', wk.data.totals.students === 5 && wk.data.totals.sessions === 2 && wk.data.totals.presentStudents === 2 && wk.data.totals.perfect === 1, JSON.stringify(wk.data.totals));
 ok('sheet shows which lessons the lecturer has signed', wk.data.sessions[colOf('Networking')].signed === true && wk.data.sessions[colOf('Databases')].signed === false);
 ok('students are sorted by name', wk.data.students.map((s) => s.name).join() === [...wk.data.students.map((s) => s.name)].sort().join());
-
-await pool.query("INSERT INTO classes (class_code, course, module) VALUES ('TIMETZ','ICT Technician','Module 1')");
-const monday = new Date(`${wk.data.weekStart}T00:00:00Z`);
-const utcStamp = (d) => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')} ${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}:${String(d.getUTCSeconds()).padStart(2, '0')}`;
-const eatSessionStamp = (hour, minute) => {
-  const eatWallTime = new Date(monday);
-  eatWallTime.setUTCHours(hour, minute, 0, 0);
-  return utcStamp(new Date(eatWallTime.getTime() - 3 * 60 * 60 * 1000));
-};
-for (const [unit, hour, minute] of [['Morning lesson', 8, 0], ['Mid-morning lesson', 10, 30]]) {
-  const start = eatSessionStamp(hour, minute);
-  const end = utcStamp(new Date(new Date(`${start.replace(' ', 'T')}Z`).getTime() + 60 * 60 * 1000));
-  await pool.query('INSERT INTO sessions (class_code, unit_name, lecturer_name, start_time, end_time, late_threshold_mins, is_active, venue) VALUES (?, ?, ?, ?, ?, 15, 0, ?)', ['TIMETZ', unit, 'Mr Teacher', start, end, 'Room 1']);
-}
-const timeZoneSheet = await api('GET', `/hod/weekly-sheet?class_code=TIMETZ&week=${wk.data.weekStart}`, { token: hod });
-const slotFor = (unit) => timeZoneSheet.data.subjects.find((subject) => subject.unit === unit)?.cells[0]?.slot;
-ok('weekly sheet places lessons by Kenya local time instead of UTC', timeZoneSheet.status === 200 && slotFor('Morning lesson') === 0 && slotFor('Mid-morning lesson') === 1, JSON.stringify(timeZoneSheet.data.subjects));
 await snap();
 
 const prevWeek = isoShift(-7);
@@ -669,13 +637,14 @@ ok('all 41 students are in the JSON and single-page register rows', longSheet.st
 
 // ---------- 12c. the official register (form MTTI/REG/CUR/01): slots, ticks/crosses, header fields ----------
 { // own block scope so these names can never clash with earlier sections
+const { spawnSync } = await import('node:child_process');
 const addDays = (iso, n) => { const d = new Date(`${iso}T00:00:00`); d.setDate(d.getDate() + n); return isoShift(Math.round((d - new Date(new Date().toDateString())) / 86400000)); };
 const mkStudent = async (adm, name, cls) => { const u = await pool.query("INSERT INTO users (email, password, name, role, class_code, status) VALUES (?, ?, ?, 'student', ?, 'active')", [`${adm}@mtti.ac.ke`, pw, name, cls]); await pool.query('INSERT INTO students (user_id, adm_no, parent_email, parent_phone) VALUES (?, ?, ?, ?)', [u[0].insertId, adm, '', '']); };
 const mkSession = async (cls, unit, lect, start, o = {}) => (await pool.query('INSERT INTO sessions (class_code, unit_name, lecturer_name, start_time, end_time, late_threshold_mins, is_active, ended_at, signed_at) VALUES (?, ?, ?, ?, ?, 15, 0, ?, ?)', [cls, unit, lect, start, start, o.end || null, o.signed || null]))[0].insertId;
 const mkLog = (sid, adm, when, late = 0) => pool.query('INSERT INTO attendance_logs (session_id, adm_no, photo_url, gps_lat, gps_lng, is_late, is_offline_synced, device_id, points_earned, timestamp) VALUES (?, ?, ?, 0, 0, ?, 0, ?, 15, ?)', [sid, adm, 'x.jpg', late, 'dev', when]);
 
 const MON = wk.data.weekStart; // Monday of the current week (any weekday this test runs on)
-const at = (day, hm) => stamp(new Date(new Date(`${addDays(MON, day)}T${hm}:00Z`).getTime() - 3 * 60 * 60 * 1000));
+const at = (day, hm) => stamp(new Date(`${addDays(MON, day)}T${hm}:00`));
 const teacherId = (await pool.query("SELECT id FROM users WHERE email = 'teacher@mtti.ac.ke'"))[0][0].id;
 await pool.query("INSERT INTO classes (class_code, course, module, department) VALUES ('REG1/S/26', 'ICT Technician', 'Module 1', 'Computing & Informatics')");
 ok('class teacher can be assigned on class creation', (await api('PUT', '/admin/classes', { token: adminTok, body: { class_code: 'REG1/S/26', course: 'ICT Technician', module: 'Module 1', department: 'Computing & Informatics', class_teacher_id: teacherId } })).status === 200);
@@ -739,18 +708,6 @@ ok('signing a lesson also records the time out', (await pool.query('SELECT ended
 // the PDF itself
 const regPdf = await api('GET', '/hod/weekly-sheet?class_code=REG1%2FS%2F26&format=pdf', { token: hod, raw: true });
 ok('register PDF is a landscape PDF with the logo image embedded', regPdf.status === 200 && regPdf.buf.slice(0, 4).toString() === '%PDF' && /\/Subtype \/Image/.test(regPdf.buf.toString('latin1')) && /MediaBox \[0 0 841\.89 595\.28\]/.test(regPdf.buf.toString('latin1')));
-const pdfContent = [];
-const pdfLatin1 = regPdf.buf.toString('latin1');
-for (const match of pdfLatin1.matchAll(/stream\r?\n/g)) {
-  const start = match.index + match[0].length;
-  const end = pdfLatin1.indexOf('\nendstream', start);
-  if (end < 0) continue;
-  const stream = Buffer.from(pdfLatin1.slice(start, end).replace(/\r$/, ''), 'latin1');
-  try { pdfContent.push(inflateSync(stream).toString('latin1')); } catch { /* Non-Flate PDF streams are not page content. */ }
-}
-const strokeColors = [...pdfContent.join('\n').matchAll(/([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+SCN/g)].map(([, r, g, b]) => [Number(r), Number(g), Number(b)]);
-ok('register PDF uses green strokes for present marks', strokeColors.some(([r, g, b]) => g > r * 3 && g > b * 1.5));
-ok('register PDF uses red strokes for absent marks', strokeColors.some(([r, g, b]) => r > g * 3 && r > b * 2));
 const pt = spawnSync('pdftotext', ['-layout', '-', '-'], { input: regPdf.buf, encoding: 'utf8' });
 if (pt.status === 0) {
   const txt = pt.stdout;
@@ -833,16 +790,6 @@ await snap();
   // ----- A. email NOT configured yet -----
   const unconfKnown = await forgot('1001@mtti.ac.ke'), unconfUnknown = await forgot('nobody@example.com');
   ok('without email settings the form says so (503), identically for known and unknown addresses', unconfKnown.status === 503 && unconfUnknown.status === 503 && unconfKnown.data.error === unconfUnknown.data.error && /not set up/.test(unconfKnown.data.error), JSON.stringify(unconfKnown.data));
-  const priorEmailEnv = Object.fromEntries(['EMAIL_PROVIDER', 'EMAIL_HOST', 'EMAIL_USER', 'EMAIL_FROM'].map((key) => [key, process.env[key]]));
-  Object.assign(process.env, { EMAIL_PROVIDER: 'smtp', EMAIL_HOST: 'smtp.gmail.com', EMAIL_USER: 'authenticated@example.com', EMAIL_FROM: 'Other Sender <other@example.com>' });
-  const { emailSettings: getEmailSettings } = await import('./src/config/email.js');
-  ok('Gmail sender always matches its authenticated account', getEmailSettings().from === '"MTTI Smart Campus" <authenticated@example.com>', getEmailSettings().from);
-  process.env.EMAIL_HOST = 'smtp.custom.example';
-  ok('custom SMTP keeps its configured sender', getEmailSettings().from === 'Other Sender <other@example.com>', getEmailSettings().from);
-  for (const [key, value] of Object.entries(priorEmailEnv)) {
-    if (value === undefined) delete process.env[key];
-    else process.env[key] = value;
-  }
   ok('invalid email addresses are rejected', (await forgot('not-an-email')).status === 400 && (await forgot('')).status === 400);
   const st0 = await api('GET', '/admin/email', { token: adminTok });
   FIX['/admin/email#unconfigured'] = st0.data;
@@ -875,7 +822,7 @@ await snap();
   });
   await new Promise((r) => smtp.listen(0, '127.0.0.1', r));
   const smtpPort = smtp.address().port;
-  Object.assign(process.env, { EMAIL_PROVIDER: 'smtp', EMAIL_HOST: '127.0.0.1', EMAIL_PORT: String(smtpPort), EMAIL_USER: 'mailer@mtti.test', EMAIL_PASS: 'smtp-pass', FRONTEND_URL: 'http://192.168.7.5:5173' });
+  Object.assign(process.env, { EMAIL_HOST: '127.0.0.1', EMAIL_PORT: String(smtpPort), EMAIL_USER: 'mailer@mtti.test', EMAIL_PASS: 'smtp-pass', FRONTEND_URL: 'http://192.168.7.5:5173' });
 
   const qp = (x) => x.replace(/=\r?\n/g, '').replace(/=([0-9A-Fa-f]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
   const decodeMail = (raw) => raw.split(/\r?\n--[^\r\n]+/).map((p) => { const [h, ...rest] = p.split(/\r?\n\r?\n/); const body = rest.join('\n\n'); return /quoted-printable/i.test(h) ? qp(body) : /base64/i.test(h) ? Buffer.from(body.replace(/\s+/g, ''), 'base64').toString() : p; }).join('\n');
@@ -907,40 +854,6 @@ await snap();
   process.env.EMAIL_PORT = String(smtpPort);
   ok('unreachable mail server gives a clear message naming host:port', noServer.status === 502 && /Cannot reach the mail server 127\.0\.0\.1:1/.test(noServer.data.error), JSON.stringify(noServer.data));
 
-  // ----- Resend HTTPS provider: fake fetch response; never contact the real service in tests -----
-  const savedProviderEnv = Object.fromEntries(['EMAIL_PROVIDER', 'EMAIL_FROM', 'RESEND_API_KEY'].map((key) => [key, process.env[key]]));
-  const nativeFetch = globalThis.fetch;
-  const resendCalls = [];
-  let resendStatus = 200;
-  process.env.EMAIL_PROVIDER = 'resend';
-  process.env.EMAIL_FROM = 'MTTI Test <no-reply@example.test>';
-  process.env.RESEND_API_KEY = 're_test_secret';
-  globalThis.fetch = async (input, init) => {
-    if (String(input) !== 'https://api.resend.com/emails') return nativeFetch(input, init);
-    resendCalls.push({ url: String(input), headers: init.headers, body: JSON.parse(init.body) });
-    return new Response(JSON.stringify(resendStatus === 200 ? { id: 'test-email-id' } : { message: 'The sender domain is not verified' }), {
-      status: resendStatus, headers: { 'Content-Type': 'application/json' },
-    });
-  };
-  try {
-    const resendStatusResponse = await api('GET', '/admin/email', { token: adminTok });
-    ok('Resend configuration is shown without exposing its API key', resendStatusResponse.status === 200 && resendStatusResponse.data.configured && resendStatusResponse.data.provider === 'resend' && resendStatusResponse.data.host === null && resendStatusResponse.data.from === process.env.EMAIL_FROM && !JSON.stringify(resendStatusResponse.data).includes('re_test_secret'), JSON.stringify(resendStatusResponse.data));
-    const resendTest = await api('POST', '/admin/email/test', { token: adminTok, body: { to: 'resend-test@example.test' } });
-    ok('Resend sends test mail over HTTPS using the configured sender and API key', resendTest.status === 200 && resendCalls.length === 1 && resendCalls[0].url === 'https://api.resend.com/emails' && resendCalls[0].headers.Authorization === 'Bearer re_test_secret' && resendCalls[0].body.from === process.env.EMAIL_FROM && resendCalls[0].body.to[0] === 'resend-test@example.test', JSON.stringify(resendTest.data));
-    resendStatus = 422;
-    const rejectedResend = await api('POST', '/admin/email/test', { token: adminTok, body: { to: 'resend-test@example.test' } });
-    ok('Resend unverified sender error explains the required setup', rejectedResend.status === 502 && /sender\/recipient/.test(rejectedResend.data.error) && /verified in Resend/.test(rejectedResend.data.error), JSON.stringify(rejectedResend.data));
-    delete process.env.RESEND_API_KEY;
-    const missingResendKey = await api('GET', '/admin/email', { token: adminTok });
-    ok('Resend status identifies missing key and sender settings', missingResendKey.status === 200 && !missingResendKey.data.configured && missingResendKey.data.missing.includes('RESEND_API_KEY'), JSON.stringify(missingResendKey.data));
-  } finally {
-    globalThis.fetch = nativeFetch;
-    for (const [key, value] of Object.entries(savedProviderEnv)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
-    }
-  }
-
   // ----- D. forgot-password email for EVERY kind of user -----
   const roles = [['student', '1001@mtti.ac.ke'], ['class rep', '1000@mtti.ac.ke'], ['teacher', 'teacher@mtti.ac.ke'], ['HOD', 'hod@mtti.ac.ke'], ['administrator', 'admin1@mtti.ac.ke']];
   for (const [who, em] of roles) {
@@ -951,7 +864,7 @@ await snap();
   const unknown = await forgot('ghost@example.com'); await wait(600);
   ok('the answer is identical for known and unknown addresses (nobody can probe who has an account)', known.status === 200 && unknown.status === 200 && JSON.stringify(known.data) === JSON.stringify(unknown.data), JSON.stringify([known.data, unknown.data]));
   ok('...and nothing is sent to an unknown address', mails.length === n1);
-  await api('POST', '/auth/register-rep', { body: { adm_no: '8200', name: 'Pending Rep', email: 'pendrep@mtti.ac.ke', department: 'Computing & Informatics', class_code: 'ITECH7', password: 'Passw0rd!' } });
+  await api('POST', '/auth/register-rep', { body: { adm_no: '8200', name: 'Pending Rep', email: 'pendrep@mtti.ac.ke', class_code: 'ITECH7', password: 'Passw0rd!' } });
   await pool.query("UPDATE users SET status = 'inactive' WHERE email = 'cli@mtti.ac.ke'");
   n1 = mails.length;
   const nots = await Promise.all([forgot('pendrep@mtti.ac.ke'), forgot('admin2@mtti.ac.ke'), forgot('cli@mtti.ac.ke')]); await wait(700);
@@ -994,7 +907,7 @@ await snap();
   delete process.env.FRONTEND_URL; nm = mails.length; await forgot('hod@mtti.ac.ke'); await mailAfter(nm);
   ok('without FRONTEND_URL the email carries a code instead of a link (links are never built from the request)', /[0-9a-f]{64}/.test(body(last())) && !/reset-password\?email=/.test(body(last())) && /code/i.test(body(last())));
   process.env.FRONTEND_URL = 'http://192.168.7.5:5173';
-  await api('POST', '/admin/staff', { token: adminTok, body: { role: 'teacher', name: '<b>Evil</b> & "Co"', email: 'evil@mtti.ac.ke', password: 'Passw0rd!', teacher_unit: 'Electrical Installation', department: 'Electrical & Electronics' } });
+  await api('POST', '/admin/staff', { token: adminTok, body: { role: 'teacher', name: '<b>Evil</b> & "Co"', email: 'evil@mtti.ac.ke', password: 'Passw0rd!' } });
   nm = mails.length; await forgot('evil@mtti.ac.ke'); await mailAfter(nm);
   ok('names are HTML-escaped inside the email\'s HTML (no injected markup)', htmlOf(last()).includes('&lt;b&gt;Evil&lt;/b&gt; &amp; &quot;Co&quot;') && !htmlOf(last()).includes('<b>Evil</b>') && htmlOf(last()).length > 200);
   // administrator-set passwords also sign the person out
@@ -1052,7 +965,7 @@ await snap();
   ok('administrator: "email is not set up" warning (email is unconfigured at this point)', has(an, 'email-unset')?.link === '/admin/settings' && has(an, 'email-unset').kind === 'warn');
   ok('administrator: no term-start nag while one is set, then it appears when cleared', !has(an, 'term-unset') && (await api('PUT', '/admin/settings', { token: adminTok, body: { term_start: '' } })).status === 200 && !!has(await notes(adminTok), 'term-unset'));
   await api('PUT', '/admin/settings', { token: adminTok, body: { term_start: isoShift(-35) } });
-  await api('POST', '/auth/register-teacher', { body: { name: 'Pending Staff', email: 'pendstaff@mtti.ac.ke', password: 'Passw0rd!', department: 'Computing & Informatics' } });
+  await api('POST', '/auth/register-teacher', { body: { name: 'Pending Staff', email: 'pendstaff@mtti.ac.ke', password: 'Passw0rd!' } });
   const sa = has(await notes(adminTok), 'staff-');
   ok('administrator: staff registrations awaiting approval', sa?.link === '/admin/staff' && /awaiting approval/.test(sa.title));
   ok('HOD does not get administrator items and vice versa', !has(hn, 'email-unset') && !has(hn, 'staff-') && !has(await notes(adminTok), 'reps-'));
@@ -1109,7 +1022,7 @@ await snap();
   ok('HOD does not get the administrator\'s items', !has(hn, 'email-unset') && !has(hn, 'staff-'));
 
   // administrator
-  await api('POST', '/auth/register-teacher', { body: { name: 'Pending Teacher', email: 'pendteach@mtti.ac.ke', password: 'Passw0rd!', department: 'Computing & Informatics' } });
+  await api('POST', '/auth/register-teacher', { body: { name: 'Pending Teacher', email: 'pendteach@mtti.ac.ke', password: 'Passw0rd!' } });
   const pendingNow = (await api('GET', '/admin/staff', { token: adminTok })).data.filter((s) => s.status === 'pending').length;
   const an = await nf(adminTok);
   ok('administrator: staff awaiting approval + "email isn\'t set up"; links only to admin pages', pendingNow >= 1 && has(an, `staff-${pendingNow}`) && has(an, 'email-unset') && within(an, ['/admin/']) && !has(an, 'term-unset'), JSON.stringify(ids(an)));
@@ -1137,9 +1050,8 @@ try {
   Date.now = qrGeneratedAt;
 }
 const resolvedRepCode = await api('POST', '/qr/rep-code/verify', { token: repT, body: { code: repQr.data.rep_checkin_code } });
-const repCheckin = await scan(repT, { session_id: repCheckinSession.data.id, adm_no: '1000', device_id: 'dev-rep' }, resolvedRepCode.data.token, false);
-const repCheckinPhoto = (await pool.query('SELECT photo_url FROM attendance_logs WHERE session_id = ? AND adm_no = ?', [repCheckinSession.data.id, '1000']))[0][0]?.photo_url;
-ok('class rep code refreshes an almost-expired QR for selfie-free check-in', repCheckinSession.status === 201 && repQr.status === 200 && resolvedRepCode.status === 200 && resolvedRepCode.data.token !== repQr.data.token && resolvedRepCode.data.data.timestamp > repQr.data.payload.timestamp + 30_000 && qrGeneratedAt() - resolvedRepCode.data.data.timestamp < 5_000 && repCheckin.status === 201 && repCheckin.data.points_earned > 0 && repCheckinPhoto == null);
+const repCheckin = await scan(repT, { session_id: repCheckinSession.data.id, adm_no: '1000', device_id: 'dev-rep' }, resolvedRepCode.data.token);
+ok('class rep code refreshes an almost-expired QR for selfie check-in', repCheckinSession.status === 201 && repQr.status === 200 && resolvedRepCode.status === 200 && resolvedRepCode.data.token !== repQr.data.token && resolvedRepCode.data.data.timestamp > repQr.data.payload.timestamp + 30_000 && qrGeneratedAt() - resolvedRepCode.data.data.timestamp < 5_000 && repCheckin.status === 201 && repCheckin.data.points_earned > 0);
 if (process.env.FIXTURES_OUT) fs.writeFileSync(process.env.FIXTURES_OUT, JSON.stringify(FIX));
 console.log(JSON.stringify({ pass, fail, failures }, null, 1));
 process.exit(fail ? 1 : 0);

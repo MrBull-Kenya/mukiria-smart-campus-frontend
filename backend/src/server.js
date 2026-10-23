@@ -21,6 +21,7 @@ import ministryRoutes from './routes/ministryRoutes.js';
 import qrRoutes from './routes/qrRoutes.js';
 import { studentRouter, classrepRouter, teacherRouter, hodRouter, campusRouter, adminRouter } from './routes/appRoutes.js';
 import { notifications } from './controllers/appController.js';
+import profileRoutes from './routes/profileRoutes.js';
 
 
 dotenv.config();
@@ -58,10 +59,9 @@ app.use((req, res, next) => {
 // API Routes Mapping
 app.set('io', io);
 
-app.get('/api/health', (_req, res) => res.json({ status: 'ok' }));
-
 // Public: login / registration / password reset (verify-token guards itself) and the class list used by the register forms
 app.use('/api/auth', authRoutes);
+app.use('/api/profile', verifyToken, profileRoutes);
 // (the register forms need the list before login; creating classes is Administrator-only, see /api/admin/classes)
 app.use('/api/classes', (req, res, next) => (req.method === 'GET' && req.path === '/list' ? next() : verifyToken(req, res, () => requireRole('admin')(req, res, next))), classRoutes);
 

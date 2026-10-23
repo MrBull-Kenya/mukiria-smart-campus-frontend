@@ -33,6 +33,14 @@ export function AuthProvider({ children }) {
     setSession({ token: null, user: null });
   }, []);
 
+  const updateUser = useCallback((updates) => {
+    setSession((current) => {
+      const user = { ...current.user, ...updates };
+      cache(current.token, user);
+      return { ...current, user };
+    });
+  }, []);
+
   const login = useCallback(async (email, password) => {
     try {
       const { data } = await api.post('/auth/login', {
@@ -74,7 +82,8 @@ export function AuthProvider({ children }) {
     isAuthenticated: !!session.token && !!session.user,
     login,
     logout,
-  }), [session, login, logout]);
+    updateUser,
+  }), [session, login, logout, updateUser]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

@@ -1,13 +1,14 @@
 import PDFDocument from 'pdfkit';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
+import jwt from 'jsonwebtoken';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import multer from 'multer';
 import pool from '../config/db.js';
-import { CHAT_ATTACHMENT_DIR, TIMETABLE_DIR, UPLOAD_DIR } from '../config/storage.js';
-import { q, one, exec, sqlDate, startOfToday, asDate, nairobiDate, NAIROBI_OFFSET_MS, fmtDate, fmtTime, pct1, ATTENDANCE_THRESHOLD } from '../utils/dbHelpers.js';
+import { TIMETABLE_DIR, UPLOAD_DIR } from '../config/storage.js';
+import { q, one, exec, sqlDate, startOfToday, asDate, fmtDate, fmtTime, pct1, ATTENDANCE_THRESHOLD } from '../utils/dbHelpers.js';
 import { awardBadges, POINTS_LATE, POINTS_ON_TIME, recomputeAttendance, recomputeClassAttendance } from './attendanceController.js';
 import { sendEmail, emailTemplates, emailSettings, isEmailConfigured, missingEmailSettings, describeEmailError } from '../config/email.js';
 import { allow } from '../utils/rateLimit.js';
@@ -15,12 +16,20 @@ import { allow } from '../utils/rateLimit.js';
 const T = ATTENDANCE_THRESHOLD;
 const HOURS = (h) => new Date(Date.now() + h * 3600 * 1000);
 const DAY_ORDER = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
+const MANUAL_PIN_LIMIT = Number(process.env.MANUAL_ATTENDANCE_PIN_ATTEMPT_LIMIT) || 10;
 
 // Wrap every handler so a thrown error becomes a clean JSON 500 (details only in the server log)
 export const wrap = (fn) => async (req, res) => {
   try { await fn(req, res); } catch (err) { console.error(`${req.method} ${req.originalUrl} failed:`, err); res.status(500).json({ error: 'Something went wrong on the server.' }); }
 };
 const bad = (res, msg, code = 400) => res.status(code).json({ error: msg });
+const validManualPin = (pin) => typeof pin === 'string' && /^\d{6}$/.test(pin);
+
+function allowManualPinAttempt(req, res) {
+  if (allow(`manual-attendance-pin:${req.user.id}`, MANUAL_PIN_LIMIT)) return true;
+  bad(res, 'Too many PIN attempts. Please wait 15 minutes and try again.', 429);
+  return false;
+}
 
 // ---------- timetable files: ANY file type up to 10 MB, stored privately ----------
 // Files live in backend/storage/timetables (NOT in the publicly served /uploads folder) and are only handed out by
@@ -40,53 +49,6 @@ export const timetableUpload = multer({
     filename: (req, file, cb) => { const ext = safeExt(file.originalname); cb(null, `${crypto.randomUUID()}${ext ? `.${ext}` : ''}`); },
   }),
   limits: { fileSize: MAX_TIMETABLE_BYTES, files: 1 },
-});
-
-const CHAT_ATTACHMENT_TYPES = {
-  'image/jpeg': ['.jpg', '.jpeg'],
-  'image/png': ['.png'],
-  'image/webp': ['.webp'],
-  'image/gif': ['.gif'],
-  'video/mp4': ['.mp4'],
-  'video/webm': ['.webm'],
-  'video/quicktime': ['.mov'],
-  'application/pdf': ['.pdf'],
-  'text/plain': ['.txt'],
-  'application/msword': ['.doc'],
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'],
-  'application/vnd.ms-excel': ['.xls'],
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
-  'application/vnd.ms-powerpoint': ['.ppt'],
-  'application/vnd.openxmlformats-officedocument.presentationml.presentation': ['.pptx'],
-};
-const CHAT_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
-export const chatAttachmentUpload = multer({
-  storage: multer.diskStorage({
-    destination: (req, file, cb) => {
-      try {
-        fs.mkdirSync(CHAT_ATTACHMENT_DIR, { recursive: true });
-        cb(null, CHAT_ATTACHMENT_DIR);
-      } catch (err) { cb(err); }
-    },
-    filename: (req, file, cb) => {
-      const extensions = CHAT_ATTACHMENT_TYPES[file.mimetype];
-      const ext = path.extname(file.originalname).toLowerCase();
-      if (!extensions?.includes(ext)) return cb(new Error('That file type is not supported.'));
-      cb(null, `${crypto.randomUUID()}${ext}`);
-    },
-  }),
-  fileFilter: (req, file, cb) => {
-    if (!CHAT_ATTACHMENT_TYPES[file.mimetype]) return cb(new Error('Send a photo, video, or supported document.'));
-    cb(null, true);
-  },
-  limits: { fileSize: CHAT_ATTACHMENT_MAX_BYTES, files: 1 },
-});
-export const chatAttachmentFile = (req, res, next) => chatAttachmentUpload.single('attachment')(req, res, (err) => {
-  if (!err) return next();
-  const tooBig = err.code === 'LIMIT_FILE_SIZE';
-  return res.status(tooBig ? 413 : 400).json({
-    error: tooBig ? 'Attachments must be 25 MB or smaller.' : err.message || 'Could not upload this attachment.',
-  });
 });
 
 // GET .../:id/file  (rep: own class only; HOD/admin: any)   ?download=1 forces a download
@@ -141,6 +103,79 @@ function sendPdf(res, filename, title, subtitle, headers, rows, widths) {
   if (!rows.length) { doc.text('No records.', 40, y); }
   doc.end();
 }
+
+function sendRepMinistryPdf(res, filename, classCode, headers, rows) {
+  const logoPath = fs.existsSync(PUBLIC_INSTITUTION_LOGO_PATH) ? PUBLIC_INSTITUTION_LOGO_PATH : PACKAGED_INSTITUTION_LOGO_PATH;
+  const ministryPath = fs.existsSync(MINISTRY_ICON_PATH) ? MINISTRY_ICON_PATH : PACKAGED_MINISTRY_ICON_PATH;
+  if (!fs.existsSync(logoPath) || !fs.existsSync(ministryPath)) {
+    throw new Error('Required institution or Ministry logo asset is missing.');
+  }
+
+  const doc = new PDFDocument({ size: 'A4', margin: 42, bufferPages: true });
+  const widths = [74, 237, 92, 100];
+  const left = 42;
+  const right = left + widths.reduce((sum, width) => sum + width, 0);
+  const headerHeight = 28;
+  const rowHeight = 24;
+  const drawTableHeader = () => {
+    const y = doc.y;
+    let x = left;
+    doc.save().rect(left, y, right - left, headerHeight).fill('#173b70');
+    doc.font('Helvetica-Bold').fontSize(9).fillColor('#ffffff');
+    headers.forEach((cell, index) => {
+      doc.text(cell, x + 7, y + 9, { width: widths[index] - 14, lineBreak: false, ellipsis: true });
+      x += widths[index];
+    });
+    doc.restore();
+    doc.y = y + headerHeight;
+  };
+
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  doc.pipe(res);
+  doc.image(logoPath, left, 38, { fit: [58, 58] });
+  doc.image(ministryPath, right - 58, 38, { fit: [58, 58] });
+  doc.font('Helvetica-Bold').fontSize(15).fillColor('#173b70')
+    .text('MUKIRIA TECHNICAL TRAINING INSTITUTE', left + 64, 43, { width: right - left - 128, align: 'center' });
+  doc.font('Helvetica').fontSize(9).fillColor('#374151')
+    .text('(MTTI)  |  MINISTRY TVET ATTENDANCE REPORT', left + 64, 64, { width: right - left - 128, align: 'center' });
+  doc.moveTo(left, 106).lineTo(right, 106).lineWidth(1).strokeColor('#cbd5e1').stroke();
+  doc.font('Helvetica-Bold').fontSize(12).fillColor('#111827')
+    .text('CLASS ATTENDANCE AND EXAM ELIGIBILITY', left, 118, { width: right - left, align: 'center' });
+  doc.font('Helvetica').fontSize(9).fillColor('#4b5563')
+    .text(`Class: ${classCode}     Generated: ${generatedAt(new Date())}     Minimum attendance: ${T}%`, left, 140, { width: right - left, align: 'center' });
+  doc.moveDown(2);
+  drawTableHeader();
+
+  rows.forEach((row, rowIndex) => {
+    if (doc.y + rowHeight > doc.page.height - doc.page.margins.bottom) {
+      doc.addPage();
+      drawTableHeader();
+    }
+    const y = doc.y;
+    if (rowIndex % 2 === 1) doc.save().rect(left, y, right - left, rowHeight).fill('#f1f5f9').restore();
+    doc.save().lineWidth(0.4).strokeColor('#cbd5e1').rect(left, y, right - left, rowHeight).stroke();
+    let x = left;
+    row.forEach((cell, index) => {
+      doc.font('Helvetica').fontSize(9).fillColor('#1f2937')
+        .text(String(cell ?? ''), x + 7, y + 7, { width: widths[index] - 14, lineBreak: false, ellipsis: true });
+      if (index > 0) doc.moveTo(x, y).lineTo(x, y + rowHeight).stroke();
+      x += widths[index];
+    });
+    doc.restore();
+    doc.y = y + rowHeight;
+  });
+  if (!rows.length) doc.font('Helvetica').fontSize(9).fillColor('#6b7280').text('No student records are available for this class.', left, doc.y + 10);
+
+  const pages = doc.bufferedPageRange();
+  for (let index = 0; index < pages.count; index++) {
+    doc.switchToPage(pages.start + index);
+    const footerY = doc.page.height - 28;
+    doc.font('Helvetica').fontSize(8).fillColor('#6b7280')
+      .text(`Mukiria Technical Training Institute (MTTI)  ·  Page ${index + 1} of ${pages.count}`, left, footerY, { width: right - left, align: 'center', lineBreak: false });
+  }
+  doc.end();
+}
 const csvCell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
 const sendCsv = (res, filename, headers, rows) => {
   res.setHeader('Content-Type', 'text/csv');
@@ -154,85 +189,22 @@ const chatTimestamp = (value) => {
   const timestamp = new Date(normalized);
   return Number.isNaN(timestamp.getTime()) ? null : timestamp.toISOString();
 };
-const chatMessageOut = (m, req) => ({
-  id: m.id, text: m.message, timestamp: chatTimestamp(m.created_at),
-  time: fmtTime(m.created_at), date: fmtDate(m.created_at),
-  sender: m.name, sender_id: m.sender_id, announcement: !!m.is_announcement,
-  edited: !!m.edited_at,
-  reply: m.reply_to ? { id: m.reply_to, text: m.reply_message || '', sender: m.reply_sender || 'Message' } : null,
-  attachment: m.attachment_path ? {
-    url: `${req.baseUrl.replace(/^\/api/, '')}/chat/${m.id}/attachment`,
-    name: m.attachment_name,
-    type: m.attachment_type,
-    size: Number(m.attachment_size),
-  } : null,
-});
 const announcementOut = (m) => ({
   id: m.id, text: m.message, timestamp: chatTimestamp(m.created_at),
   time: fmtTime(m.created_at), date: fmtDate(m.created_at),
   sender: m.name, sender_id: m.sender_id, announcement: !!m.is_announcement,
 });
-const discardChatUpload = async (req) => {
-  if (!req.file) return;
-  try { await fs.promises.unlink(path.join(CHAT_ATTACHMENT_DIR, path.basename(req.file.filename))); }
-  catch (err) { if (err.code !== 'ENOENT') console.error('Failed to remove rejected chat attachment:', err); }
-};
 
 async function postChat(req, res, announcement) {
-  const message = typeof req.body.message === 'string' ? req.body.message.trim() : '';
-  if (!message && !req.file) return bad(res, 'Write a message or attach a file.');
-  if (message.length > 2000) {
-    await discardChatUpload(req);
-    return bad(res, 'Messages must be 2,000 characters or fewer.');
-  }
+  const message = String(req.body.message || '').trim();
+  if (!message) return bad(res, 'Message cannot be empty.');
   const cc = classOf(req);
-  if (!cc) {
-    await discardChatUpload(req);
-    return bad(res, 'Your account has no class.');
-  }
-  if (announcement && req.file) {
-    await discardChatUpload(req);
-    return bad(res, 'Announcements cannot have attachments.');
-  }
-  const replyId = req.body.reply_to ? Number(req.body.reply_to) : null;
-  if (replyId !== null && (!Number.isInteger(replyId) || replyId < 1)) {
-    await discardChatUpload(req);
-    return bad(res, 'Invalid reply target.');
-  }
-  if (replyId !== null) {
-    let reply;
-    try { reply = await one('SELECT id FROM chat_messages WHERE id = ? AND class_code = ?', [replyId, cc]); }
-    catch (err) { await discardChatUpload(req); throw err; }
-    if (!reply) {
-      await discardChatUpload(req);
-      return bad(res, 'The message you are replying to is not in this class.', 404);
-    }
-  }
-  let insertedId;
-  try {
-    const r = await exec(
-      `INSERT INTO chat_messages (class_code, sender_id, message, is_announcement, reply_to, attachment_path, attachment_name, attachment_type, attachment_size)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [cc, req.user.id, message, announcement ? 1 : 0, replyId, req.file?.filename || null,
-        req.file ? cleanName(req.file.originalname) : null, req.file?.mimetype || null, req.file?.size || null]);
-    insertedId = r.insertId;
-    const row = await one(
-      `SELECT m.*, u.name, parent.message AS reply_message, reply_user.name AS reply_sender
-       FROM chat_messages m JOIN users u ON u.id = m.sender_id
-       LEFT JOIN chat_messages parent ON parent.id = m.reply_to
-       LEFT JOIN users reply_user ON reply_user.id = parent.sender_id
-       WHERE m.id = ?`, [r.insertId]);
-    const out = chatMessageOut(row, req);
-    req.app.get('io')?.to(cc).emit('receive_message', { ...out, class_code: cc });
-    res.status(201).json({ ...out, mine: true });
-  } catch (err) {
-    if (insertedId) {
-      try { await exec('DELETE FROM chat_messages WHERE id = ? AND sender_id = ?', [insertedId, req.user.id]); }
-      catch (cleanupError) { console.error('Failed to remove incomplete chat message:', cleanupError); }
-    }
-    await discardChatUpload(req);
-    throw err;
-  }
+  if (!cc) return bad(res, 'Your account has no class.');
+  const r = await exec('INSERT INTO chat_messages (class_code, sender_id, message, is_announcement) VALUES (?, ?, ?, ?)', [cc, req.user.id, message, announcement ? 1 : 0]);
+  const row = await one('SELECT m.*, u.name FROM chat_messages m JOIN users u ON u.id = m.sender_id WHERE m.id = ?', [r.insertId]);
+  const out = announcementOut(row);
+  req.app.get('io')?.to(cc).emit('receive_message', { ...out, class_code: cc });
+  res.status(201).json({ ...out, mine: true });
 }
 
 // =========================================================================================
@@ -302,67 +274,10 @@ export const student = {
 
   chatList: wrap(async (req, res) => {
     const cc = classOf(req);
-    const rows = await q(
-      `SELECT m.*, u.name, parent.message AS reply_message, reply_user.name AS reply_sender
-       FROM chat_messages m JOIN users u ON u.id = m.sender_id
-       LEFT JOIN chat_messages parent ON parent.id = m.reply_to
-       LEFT JOIN users reply_user ON reply_user.id = parent.sender_id
-       WHERE m.class_code = ? ORDER BY m.id DESC LIMIT 100`, [cc]);
-    res.json(rows.reverse().map((m) => ({ ...chatMessageOut(m, req), mine: m.sender_id === req.user.id })));
+    const rows = await q('SELECT m.*, u.name FROM chat_messages m JOIN users u ON u.id = m.sender_id WHERE m.class_code = ? ORDER BY m.id DESC LIMIT 100', [cc]);
+    res.json(rows.reverse().map((m) => ({ ...announcementOut(m), mine: m.sender_id === req.user.id })));
   }),
   chatSend: wrap((req, res) => postChat(req, res, false)),
-  chatEdit: wrap(async (req, res) => {
-    const id = Number(req.params.id);
-    const message = typeof req.body.message === 'string' ? req.body.message.trim() : '';
-    if (!Number.isInteger(id) || id < 1) return bad(res, 'Invalid message ID.');
-    if (!message || message.length > 2000) return bad(res, 'Message is required and must be 2,000 characters or fewer.');
-    const row = await one('SELECT id, class_code, sender_id, is_announcement FROM chat_messages WHERE id = ?', [id]);
-    if (!row) return bad(res, 'Message not found.', 404);
-    if (['student', 'student_rep'].includes(req.user.role) && row.class_code !== req.user.class_code) return bad(res, 'That message is not in your class.', 403);
-    if (Number(row.sender_id) !== Number(req.user.id) || row.is_announcement) return bad(res, 'You can only edit your own chat messages.', 403);
-    await exec('UPDATE chat_messages SET message = ?, edited_at = ? WHERE id = ?', [message, sqlDate(), id]);
-    const updated = await one(
-      `SELECT m.*, u.name, parent.message AS reply_message, reply_user.name AS reply_sender
-       FROM chat_messages m JOIN users u ON u.id = m.sender_id
-       LEFT JOIN chat_messages parent ON parent.id = m.reply_to
-       LEFT JOIN users reply_user ON reply_user.id = parent.sender_id WHERE m.id = ?`, [id]);
-    const out = { ...chatMessageOut(updated, req), mine: true };
-    req.app.get('io')?.to(row.class_code).emit('message_updated', { ...out, class_code: row.class_code });
-    res.json(out);
-  }),
-  chatDelete: wrap(async (req, res) => {
-    const id = Number(req.params.id);
-    if (!Number.isInteger(id) || id < 1) return bad(res, 'Invalid message ID.');
-    const row = await one('SELECT id, class_code, sender_id, is_announcement, attachment_path FROM chat_messages WHERE id = ?', [id]);
-    if (!row) return bad(res, 'Message not found.', 404);
-    if (['student', 'student_rep'].includes(req.user.role) && row.class_code !== req.user.class_code) return bad(res, 'That message is not in your class.', 403);
-    if (Number(row.sender_id) !== Number(req.user.id) || row.is_announcement) return bad(res, 'You can only delete your own chat messages.', 403);
-    await exec('UPDATE chat_messages SET reply_to = NULL WHERE reply_to = ?', [id]);
-    await exec('DELETE FROM chat_messages WHERE id = ?', [id]);
-    if (row.attachment_path) {
-      try { await fs.promises.unlink(path.join(CHAT_ATTACHMENT_DIR, path.basename(row.attachment_path))); }
-      catch (err) { if (err.code !== 'ENOENT') console.error('Failed to remove deleted chat attachment:', err); }
-    }
-    req.app.get('io')?.to(row.class_code).emit('message_deleted', { id, class_code: row.class_code });
-    res.json({ message: 'Message deleted.' });
-  }),
-  chatAttachment: wrap(async (req, res) => {
-    const id = Number(req.params.id);
-    if (!Number.isInteger(id) || id < 1) return bad(res, 'Invalid message ID.');
-    const row = await one('SELECT class_code, attachment_path, attachment_name, attachment_type FROM chat_messages WHERE id = ?', [id]);
-    if (!row || !row.attachment_path) return bad(res, 'Attachment not found.', 404);
-    if (['student', 'student_rep'].includes(req.user.role) && row.class_code !== req.user.class_code) return bad(res, 'That attachment is not in your class.', 403);
-    const fullPath = path.join(CHAT_ATTACHMENT_DIR, path.basename(row.attachment_path));
-    if (!fs.existsSync(fullPath)) return bad(res, 'The stored attachment is missing from the server.', 404);
-    const type = CHAT_ATTACHMENT_TYPES[row.attachment_type] ? row.attachment_type : 'application/octet-stream';
-    const inline = type.startsWith('image/') || type.startsWith('video/') || type === 'application/pdf';
-    const filename = cleanName(row.attachment_name);
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Content-Type', type);
-    res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename="${filename.replace(/[^\x20-\x7e]/g, '_')}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
-    res.setHeader('Content-Length', fs.statSync(fullPath).size);
-    res.sendFile(fullPath);
-  }),
 
   tempIdList: wrap(async (req, res) => {
     const adm = await admOf(req);
@@ -398,7 +313,7 @@ export const rep = {
       'INSERT INTO sessions (class_code, unit_name, lecturer_name, start_time, end_time, late_threshold_mins, is_active, venue) VALUES (?, ?, ?, ?, ?, ?, 1, ?)',
       [cc, unit_name.trim(), lecturer_name.trim(), sqlDate(startedAt), sqlDate(new Date(startedAt.getTime() + 3 * 3600 * 1000)), Number(late_threshold_mins) || 15, venue || null]);
     await recomputeClassAttendance(cc); // a new session lowers the % of everyone who hasn't attended yet
-    res.status(201).json({ id: r.insertId, class_code: cc, unit_name: unit_name.trim(), lecturer_name: lecturer_name.trim(), venue: venue || null, startedAt: fmtTime(startedAt) });
+    res.status(201).json({ id: r.insertId, class_code: cc, unit_name: unit_name.trim(), lecturer_name: lecturer_name.trim(), venue: venue || null });
   }),
   sessionCurrent: wrap(async (req, res) => {
     const s = await one('SELECT * FROM sessions WHERE class_code = ? AND is_active = 1 ORDER BY id DESC LIMIT 1', [classOf(req)]);
@@ -424,6 +339,63 @@ export const rep = {
         method: student.record_method || null,
       })),
     });
+  }),
+  manualAttendancePinStatus: wrap(async (req, res) => {
+    const user = await one('SELECT manual_attendance_pin_hash FROM users WHERE id = ?', [req.user.id]);
+    if (!user) return bad(res, 'Class representative account not found.', 404);
+    res.json({ configured: !!user.manual_attendance_pin_hash });
+  }),
+  manualAttendancePinSetup: wrap(async (req, res) => {
+    const { pin, confirmPin } = req.body;
+    if (!validManualPin(pin) || !validManualPin(confirmPin)) return bad(res, 'PIN and confirmation must each contain exactly six digits.');
+    if (pin !== confirmPin) return bad(res, 'PIN and confirmation do not match.');
+    const user = await one('SELECT manual_attendance_pin_hash FROM users WHERE id = ?', [req.user.id]);
+    if (!user) return bad(res, 'Class representative account not found.', 404);
+    if (user.manual_attendance_pin_hash) return bad(res, 'A Mark Present PIN is already set. Enter your current PIN to change it.', 409);
+    const hash = await bcrypt.hash(pin, 10);
+    const result = await exec(
+      'UPDATE users SET manual_attendance_pin_hash = ?, manual_attendance_pin_version = manual_attendance_pin_version + 1 WHERE id = ? AND manual_attendance_pin_hash IS NULL',
+      [hash, req.user.id]
+    );
+    if (!result.affectedRows) return bad(res, 'A Mark Present PIN was just set. Enter it to unlock the page.', 409);
+    res.status(201).json({ message: 'Your six-digit Mark Present PIN is set. Enter it to unlock attendance marking.' });
+  }),
+  manualAttendancePinUnlock: wrap(async (req, res) => {
+    if (!allowManualPinAttempt(req, res)) return;
+    const { pin } = req.body;
+    if (!validManualPin(pin)) return bad(res, 'Enter a valid six-digit PIN.');
+    const user = await one(
+      'SELECT manual_attendance_pin_hash, manual_attendance_pin_version FROM users WHERE id = ?',
+      [req.user.id]
+    );
+    if (!user?.manual_attendance_pin_hash) return bad(res, 'Set up your Mark Present PIN before unlocking the page.', 409);
+    if (!(await bcrypt.compare(pin, user.manual_attendance_pin_hash))) return bad(res, 'The PIN is incorrect.');
+    const token = jwt.sign(
+      { id: req.user.id, scope: 'manual-attendance', pinVersion: Number(user.manual_attendance_pin_version) },
+      process.env.JWT_SECRET || 'supersecretmtti2026',
+      { expiresIn: '10m' }
+    );
+    res.json({ token, expiresInSeconds: 600 });
+  }),
+  manualAttendancePinChange: wrap(async (req, res) => {
+    if (!allowManualPinAttempt(req, res)) return;
+    const { oldPin, newPin, confirmPin } = req.body;
+    if (!validManualPin(oldPin) || !validManualPin(newPin) || !validManualPin(confirmPin)) {
+      return bad(res, 'The old PIN, new PIN and confirmation must each contain exactly six digits.');
+    }
+    if (newPin !== confirmPin) return bad(res, 'New PIN and confirmation do not match.');
+    if (oldPin === newPin) return bad(res, 'Choose a new PIN that differs from your current PIN.');
+    const user = await one('SELECT manual_attendance_pin_hash FROM users WHERE id = ?', [req.user.id]);
+    if (!user) return bad(res, 'Class representative account not found.', 404);
+    if (!user.manual_attendance_pin_hash) return bad(res, 'Set up your Mark Present PIN before changing it.', 409);
+    if (!(await bcrypt.compare(oldPin, user.manual_attendance_pin_hash))) return bad(res, 'The current PIN is incorrect.');
+    const hash = await bcrypt.hash(newPin, 10);
+    const result = await exec(
+      'UPDATE users SET manual_attendance_pin_hash = ?, manual_attendance_pin_version = manual_attendance_pin_version + 1 WHERE id = ? AND manual_attendance_pin_hash = ?',
+      [hash, req.user.id, user.manual_attendance_pin_hash]
+    );
+    if (!result.affectedRows) return bad(res, 'Your PIN changed in another request. Please try again.', 409);
+    res.json({ message: 'Mark Present PIN changed. Unlock the page again using your new PIN.' });
   }),
   manualAttendanceMark: wrap(async (req, res) => {
     const cc = classOf(req);
@@ -563,9 +535,6 @@ export const rep = {
   announce: wrap((req, res) => postChat(req, res, true)),
   chatList: student.chatList,
   chatSend: student.chatSend,
-  chatEdit: student.chatEdit,
-  chatDelete: student.chatDelete,
-  chatAttachment: student.chatAttachment,
 
   timetable: wrap(async (req, res) => {
     const v = await one('SELECT * FROM timetable_versions WHERE class_code = ? ORDER BY id DESC LIMIT 1', [classOf(req)]);
@@ -633,7 +602,7 @@ export const rep = {
     const headers = ['Adm No', 'Name', 'Attendance', 'Exam status'];
     const fmt = String(req.query.format || 'pdf').toLowerCase();
     if (fmt === 'csv') return sendCsv(res, `attendance-${cc.replace(/\W+/g, '_')}.csv`, headers, rows);
-    sendPdf(res, `attendance-${cc.replace(/\W+/g, '_')}.pdf`, `MTTI Attendance Report: ${cc}`, `Generated ${fmtDate(new Date())} · ${rows.length} student(s) · minimum ${T}%`, headers, rows, [90, 220, 90, 100]);
+    sendRepMinistryPdf(res, `attendance-${cc.replace(/\W+/g, '_')}.pdf`, cc, headers, rows);
   }),
 
   tempIds: wrap(async (req, res) => {
@@ -724,6 +693,24 @@ export const teacher = {
     }
     res.json(out);
   }),
+  absent: wrap(async (req, res) => {
+    const session = (await lecturerSessions(req)).find((item) => String(item.id) === String(req.params.id));
+    if (!session) return bad(res, 'Session not found (or it is not one of your lessons).', 404);
+    const roster = await classStudents(session.class_code);
+    const presentRows = await q('SELECT adm_no FROM attendance_logs WHERE session_id = ?', [session.id]);
+    const present = new Set(presentRows.map((row) => row.adm_no));
+    const absent = roster.filter((student) => !present.has(student.adm_no))
+      .map((student) => ({ adm: student.adm_no, name: student.name, role: student.role }));
+    res.json({
+      session: {
+        id: session.id, unit: session.unit_name, classCode: session.class_code,
+        date: fmtDate(session.start_time), time: fmtTime(session.start_time), active: !!session.is_active,
+      },
+      total: roster.length,
+      present: roster.length - absent.length,
+      absent,
+    });
+  }),
   sign: wrap(async (req, res) => {
     const s = (await lecturerSessions(req)).find((x) => String(x.id) === String(req.params.id));
     if (!s) return bad(res, 'Session not found (or it is not one of your lessons).', 404);
@@ -738,18 +725,20 @@ export const teacher = {
 // HOD
 // =========================================================================================
 async function allStudentsWithStats() {
-  const rows = await q("SELECT s.adm_no, s.attendance_pct, u.name, u.class_code FROM students s JOIN users u ON u.id = s.user_id WHERE u.role IN ('student','student_rep') AND u.status = 'active' ORDER BY u.class_code, u.name");
+  const rows = await q("SELECT s.adm_no, s.attendance_pct, u.name, u.class_code, c.department FROM students s JOIN users u ON u.id = s.user_id LEFT JOIN classes c ON c.class_code = u.class_code WHERE u.role IN ('student','student_rep') AND u.status = 'active' ORDER BY u.class_code, u.name");
   const held = new Map((await q('SELECT class_code, COUNT(*) AS n FROM sessions GROUP BY class_code')).map((r) => [r.class_code, r.n]));
   const att = new Map((await q('SELECT adm_no, COUNT(DISTINCT session_id) AS n FROM attendance_logs GROUP BY adm_no')).map((r) => [r.adm_no, r.n]));
-  return rows.map((r) => ({ adm: r.adm_no, name: r.name, classCode: r.class_code, attendance: Number(r.attendance_pct), missed: Math.max(0, (held.get(r.class_code) || 0) - (att.get(r.adm_no) || 0)) }));
+  return rows.map((r) => ({ adm: r.adm_no, name: r.name, classCode: r.class_code, department: r.department || '', attendance: Number(r.attendance_pct), missed: Math.max(0, (held.get(r.class_code) || 0) - (att.get(r.adm_no) || 0)) }));
 }
 
-async function ministryPayload() {
-  const students = await allStudentsWithStats();
+async function ministryPayload({ department = '', classCode = '' } = {}) {
+  const students = (await allStudentsWithStats()).filter((student) =>
+    (!department || student.department === department) && (!classCode || student.classCode === classCode)
+  );
   const byClass = new Map();
   for (const s of students) { const c = byClass.get(s.classCode) || { code: s.classCode, students: 0, sum: 0, eligible: 0 }; c.students++; c.sum += s.attendance; if (s.attendance >= T) c.eligible++; byClass.set(s.classCode, c); }
   const classes = [...byClass.values()].map((c) => ({ code: c.code, students: c.students, avgAttendance: Math.round((c.sum / c.students) * 10) / 10, eligible: c.eligible, barred: c.students - c.eligible }));
-  return { generatedAt: new Date().toISOString(), threshold: T, classes, totals: { students: students.length, eligible: classes.reduce((n, c) => n + c.eligible, 0), barred: classes.reduce((n, c) => n + c.barred, 0) } };
+  return { generatedAt: new Date().toISOString(), threshold: T, department, classCode, classes, totals: { students: students.length, eligible: classes.reduce((n, c) => n + c.eligible, 0), barred: classes.reduce((n, c) => n + c.barred, 0) } };
 }
 
 export const hod = {
@@ -808,8 +797,14 @@ export const hod = {
   }),
 
   ministryGenerate: wrap(async (req, res) => {
-    const payload = await ministryPayload();
-    const title = `Ministry Attendance Audit ${fmtDate(new Date())}`;
+    const department = String(req.body.department || '').trim();
+    const classCode = String(req.body.class_code || '').trim();
+    const selectedClass = classCode ? await one('SELECT class_code, department FROM classes WHERE class_code = ?', [classCode]) : null;
+    if (classCode && !selectedClass) return bad(res, 'Selected class was not found.', 404);
+    if (department && selectedClass && selectedClass.department !== department) return bad(res, 'Selected class does not belong to that department.');
+    const payload = await ministryPayload({ department, classCode });
+    const scope = classCode ? ` · ${classCode}` : department ? ` · ${department}` : '';
+    const title = `Ministry Attendance Audit${scope} ${fmtDate(new Date())}`;
     const r = await exec('INSERT INTO ministry_reports (report_title, data_payload, generated_by) VALUES (?, ?, ?)', [title, JSON.stringify(payload), req.user.id]);
     res.status(201).json({ id: r.insertId, title, totals: payload.totals });
   }),
@@ -821,8 +816,52 @@ export const hod = {
     const r = await one('SELECT * FROM ministry_reports WHERE id = ?', [req.params.id]);
     if (!r) return bad(res, 'Report not found.', 404);
     const p = typeof r.data_payload === 'string' ? JSON.parse(r.data_payload) : r.data_payload;
-    sendPdf(res, `ministry-audit-${r.id}.pdf`, r.report_title, `Generated ${fmtDate(r.created_at)} · minimum attendance ${p.threshold}% · ${p.totals.students} students, ${p.totals.eligible} eligible, ${p.totals.barred} barred`,
-      ['Class', 'Students', 'Avg attendance', 'Eligible', 'Barred'], p.classes.map((c) => [c.code, c.students, `${c.avgAttendance}%`, c.eligible, c.barred]), [150, 80, 110, 80, 80]);
+    const logoPath = fs.existsSync(PUBLIC_INSTITUTION_LOGO_PATH) ? PUBLIC_INSTITUTION_LOGO_PATH : PACKAGED_INSTITUTION_LOGO_PATH;
+    const iconPath = fs.existsSync(MINISTRY_ICON_PATH) ? MINISTRY_ICON_PATH : PACKAGED_MINISTRY_ICON_PATH;
+    if (!fs.existsSync(logoPath) || !fs.existsSync(iconPath)) throw new Error('Required MTTI or Ministry logo asset is missing.');
+    const doc = new PDFDocument({ margin: 42, size: 'A4' });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="ministry-audit-${r.id}.pdf"`);
+    doc.pipe(res);
+    const top = 38;
+    doc.image(logoPath, 42, top, { fit: [66, 66] });
+    doc.image(iconPath, 487, top, { fit: [66, 66] });
+    doc.fillColor('#123b70').font('Helvetica-Bold').fontSize(16).text('MUKIRIA TECHNICAL TRAINING INSTITUTE', 118, top + 10, { width: 359, align: 'center' });
+    doc.fillColor('#334155').font('Helvetica').fontSize(10).text('MINISTRY OF EDUCATION · ATTENDANCE COMPLIANCE', 118, top + 37, { width: 359, align: 'center' });
+    doc.moveTo(42, 116).lineTo(553, 116).lineWidth(2).strokeColor('#1d4ed8').stroke();
+    doc.fillColor('#0f172a').font('Helvetica-Bold').fontSize(14).text('MINISTRY ATTENDANCE COMPLIANCE REPORT', 42, 132, { align: 'center' });
+    doc.font('Helvetica').fontSize(9).fillColor('#475569')
+      .text(r.report_title, 42, 155, { align: 'center' })
+      .text(`Generated ${fmtDate(r.created_at)} · Minimum attendance ${p.threshold}%`, 42, 171, { align: 'center' });
+    const scope = [p.department && `Department: ${p.department}`, p.classCode && `Class: ${p.classCode}`].filter(Boolean).join(' · ') || 'Scope: All departments and classes';
+    doc.font('Helvetica-Bold').fontSize(9).fillColor('#1e293b').text(scope, 42, 190);
+    doc.font('Helvetica').fontSize(9).fillColor('#475569')
+      .text(`Students: ${p.totals.students}     Eligible: ${p.totals.eligible}     Barred: ${p.totals.barred}`, 42, 207);
+    let y = 238;
+    const drawHeader = () => {
+      doc.rect(42, y, 511, 22).fill('#eaf1fb');
+      doc.fillColor('#123b70').font('Helvetica-Bold').fontSize(8);
+      doc.text('CLASS', 50, y + 7, { width: 150 });
+      doc.text('STUDENTS', 208, y + 7, { width: 62, align: 'right' });
+      doc.text('AVG. ATTENDANCE', 279, y + 7, { width: 112, align: 'right' });
+      doc.text('ELIGIBLE', 398, y + 7, { width: 60, align: 'right' });
+      doc.text('BARRED', 466, y + 7, { width: 75, align: 'right' });
+      y += 22;
+    };
+    drawHeader();
+    doc.font('Helvetica').fontSize(9).fillColor('#1e293b');
+    for (const row of p.classes) {
+      if (y > 752) { doc.addPage(); y = 42; drawHeader(); doc.font('Helvetica').fontSize(9).fillColor('#1e293b'); }
+      doc.text(row.code, 50, y + 6, { width: 150 });
+      doc.text(String(row.students), 208, y + 6, { width: 62, align: 'right' });
+      doc.text(`${row.avgAttendance}%`, 279, y + 6, { width: 112, align: 'right' });
+      doc.text(String(row.eligible), 398, y + 6, { width: 60, align: 'right' });
+      doc.text(String(row.barred), 466, y + 6, { width: 75, align: 'right' });
+      y += 22;
+      doc.moveTo(42, y).lineTo(553, y).lineWidth(0.4).strokeColor('#cbd5e1').stroke();
+    }
+    if (!p.classes.length) doc.font('Helvetica').fontSize(10).fillColor('#475569').text('No student records exist for this report scope.', 42, y + 16);
+    doc.end();
   }),
 
   // Students/reps are bound to the first device they sign in on. This lists them (any class) and shows who has one registered.
@@ -906,19 +945,26 @@ export const campus = {
 // ADMINISTRATOR: classes and staff accounts (replaces doing this by hand in the database)
 // =========================================================================================
 const STAFF_ROLES = ['teacher', 'hod', 'admin'];
-const STAFF_DEPARTMENTS = [
-  'Computing & Informatics',
-  'Mechanical & Automotive',
-  'Electrical & Electronics',
-  'Agriculture & Environmental Studies',
-  'Hospitality & Institution Management',
-  'Business Studies & Entrepreneurship',
-  'Building & Civil Engineering',
-  'Fashion & Design',
-  'Cosmetology',
-];
 const CLASS_CODE_RE = /^[A-Za-z0-9][A-Za-z0-9 /_.\-]{1,49}$/;
 const staffById = (id) => one("SELECT id, name, email, role, status FROM users WHERE id = ? AND role IN ('teacher','hod','admin')", [id]);
+async function validStaffDetails(body, role, currentId = null) {
+  const name = String(body.name || '').trim();
+  const email = String(body.email || '').trim().toLowerCase();
+  const department = String(body.department || '').trim();
+  const teacherUnit = String(body.teacher_unit || '').trim();
+  const classCode = role === 'teacher' ? String(body.class_code || '').trim() : '';
+  if (!name || name.length > 150) return { error: 'Name is required and must be 150 characters or fewer.' };
+  if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return { error: 'Enter a valid email address.' };
+  if (department.length > 100) return { error: 'Department must be 100 characters or fewer.' };
+  if (teacherUnit.length > 150) return { error: 'Unit / subject must be 150 characters or fewer.' };
+  if (classCode && !CLASS_CODE_RE.test(classCode)) return { error: 'Choose a valid class for the class-teacher assignment.' };
+  if (classCode) {
+    const cls = await one('SELECT class_code, class_teacher_id FROM classes WHERE class_code = ?', [classCode]);
+    if (!cls) return { error: 'The selected class was not found.' };
+    if (cls.class_teacher_id && Number(cls.class_teacher_id) !== Number(currentId)) return { error: 'The selected class already has a class teacher.', status: 409 };
+  }
+  return { name, email, department: department || null, teacherUnit: teacherUnit || null, classCode };
+}
 
 export const admin = {
   dashboard: wrap(async (req, res) => {
@@ -1007,59 +1053,27 @@ export const admin = {
   classMemberUpdate: wrap(async (req, res) => {
     const code = String(req.body.code || '').trim();
     const userId = Number(req.body.user_id);
-    const updateAdmNo = req.body.adm_no !== undefined;
-    const admNo = updateAdmNo && typeof req.body.adm_no === 'string' ? req.body.adm_no.trim() : undefined;
     const name = String(req.body.name || '').trim();
     const email = String(req.body.email || '').trim().toLowerCase();
     const parentEmail = String(req.body.parent_email || '').trim().toLowerCase();
     const parentPhone = String(req.body.parent_phone || '').trim();
     if (!code || !Number.isInteger(userId) || userId < 1) return bad(res, 'A class code and valid user ID are required.');
-    if (updateAdmNo && (!admNo || admNo.length > 50)) return bad(res, 'Admission number is required and must be 50 characters or fewer.');
     if (!name || name.length > 150) return bad(res, 'Name is required and must be 150 characters or fewer.');
     if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return bad(res, 'Enter a valid email address.');
     if (parentEmail && (parentEmail.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(parentEmail))) return bad(res, 'Enter a valid parent email address or leave it blank.');
     if (parentPhone.length > 50) return bad(res, 'Parent phone must be 50 characters or fewer.');
+    const member = await one("SELECT id FROM users WHERE id = ? AND class_code = ? AND role IN ('student', 'student_rep')", [userId, code]);
+    if (!member) return bad(res, 'Member not found in this class.', 404);
     if (await one('SELECT id FROM users WHERE email = ? AND id <> ?', [email, userId])) return bad(res, 'An account with this email already exists.', 409);
 
     const connection = await pool.getConnection();
     try {
       await connection.beginTransaction();
-      const [members] = await connection.query(
-        "SELECT u.id, s.adm_no FROM users u LEFT JOIN students s ON s.user_id = u.id WHERE u.id = ? AND u.class_code = ? AND u.role IN ('student', 'student_rep') FOR UPDATE",
-        [userId, code]);
-      const member = members[0];
-      if (!member) {
-        await connection.rollback();
-        return bad(res, 'Member not found in this class.', 404);
-      }
-      if (updateAdmNo && !member.adm_no) {
-        await connection.rollback();
-        return bad(res, 'This account has no linked student admission record.', 409);
-      }
-      const [duplicates] = updateAdmNo ? await connection.query(
-        'SELECT user_id FROM students WHERE LOWER(TRIM(adm_no)) = LOWER(?) AND user_id <> ?',
-        [admNo, userId]) : [[]];
-      if (duplicates.length) {
-        await connection.rollback();
-        return bad(res, 'A student with this admission number already exists.', 409);
-      }
-      const admissionChanged = updateAdmNo && admNo !== member.adm_no;
-      await connection.query(
-        'UPDATE users SET name = ?, email = ?, token_version = token_version + ? WHERE id = ?',
-        [name, email, admissionChanged ? 1 : 0, userId]);
+      await connection.query('UPDATE users SET name = ?, email = ? WHERE id = ?', [name, email, userId]);
       await connection.query('UPDATE students SET parent_email = ?, parent_phone = ? WHERE user_id = ?', [parentEmail, parentPhone, userId]);
-      if (admissionChanged) {
-        await connection.query('UPDATE students SET adm_no = ? WHERE user_id = ?', [admNo, userId]);
-        for (const table of ['attendance_logs', 'device_locks', 'parent_alerts', 'points_logs', 'badges', 'temp_id_requests', 'campus_checkins', 'fee_accounts']) {
-          await connection.query(`UPDATE ${table} SET adm_no = ? WHERE adm_no = ?`, [admNo, member.adm_no]);
-        }
-      }
       await connection.commit();
     } catch (err) {
       await connection.rollback();
-      if (err.code === 'ER_DUP_ENTRY' || String(err.code || '').startsWith('SQLITE_CONSTRAINT')) {
-        return bad(res, 'This admission number conflicts with existing student records.', 409);
-      }
       throw err;
     } finally {
       connection.release();
@@ -1142,7 +1156,7 @@ export const admin = {
   emailStatus: wrap(async (req, res) => {
     const s = emailSettings();
     const mask = (e) => (e ? e.replace(/^(.{2}).*(@.*)$/, '$1***$2') : null);
-    res.json({ configured: isEmailConfigured(), missing: missingEmailSettings(), provider: s.provider, host: s.provider === 'smtp' ? s.host || null : null, port: s.provider === 'smtp' ? s.port : null, secure: s.provider === 'smtp' ? s.secure : null, user: mask(s.user), from: s.from || null, frontendUrl: s.frontendUrl || null });
+    res.json({ configured: isEmailConfigured(), missing: missingEmailSettings(), host: s.host || null, port: s.port, secure: s.secure, user: mask(s.user), from: s.from || null, frontendUrl: s.frontendUrl || null });
   }),
   emailTest: wrap(async (req, res) => {
     if (!allow(`email-test:${req.user.id}`, 10)) return bad(res, 'Too many test emails. Wait a few minutes.', 429);
@@ -1154,12 +1168,9 @@ export const admin = {
   }),
   staff: wrap(async (req, res) => {
     const order = { pending: 0, active: 1, inactive: 2, rejected: 3 };
-    const rows = await q(`SELECT u.id, u.name, u.email, u.role, u.status, u.teacher_unit, u.department,
-      c.class_teacher_class
-      FROM users u LEFT JOIN (
-        SELECT class_teacher_id, GROUP_CONCAT(class_code) AS class_teacher_class
-        FROM classes GROUP BY class_teacher_id
-      ) c ON c.class_teacher_id = u.id
+    const rows = await q(`SELECT u.id, u.name, u.email, u.role, u.status, u.department, u.teacher_unit,
+      c.class_code AS class_teacher_class
+      FROM users u LEFT JOIN classes c ON c.class_teacher_id = u.id
       WHERE u.role IN ('teacher','hod','admin') ORDER BY u.name`);
     rows.sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9));
     res.json(rows.map((r) => ({ ...r, isMe: r.id === req.user.id })));
@@ -1167,52 +1178,80 @@ export const admin = {
   staffAdd: wrap(async (req, res) => {
     const { role, name, email, password } = req.body;
     if (!STAFF_ROLES.includes(role)) return bad(res, `Role must be one of: ${STAFF_ROLES.join(', ')}.`);
-    if (!String(name || '').trim() || !String(email || '').trim()) return bad(res, 'Name and email are required.');
     if (String(password || '').length < 8) return bad(res, 'Password must be at least 8 characters.');
-    const teacherUnit = role === 'teacher' ? String(req.body.teacher_unit || '').trim() : '';
-    if (role === 'teacher' && !teacherUnit) return bad(res, 'Unit / Subject taught is required for teachers.');
-    if (teacherUnit.length > 150) return bad(res, 'Unit / Subject taught must be 150 characters or fewer.');
-    const department = ['hod', 'teacher'].includes(role) ? String(req.body.department || '').trim() : '';
-    if (['hod', 'teacher'].includes(role) && !STAFF_DEPARTMENTS.includes(department)) return bad(res, 'Choose a valid institutional department.');
-    const isClassTeacher = role === 'teacher' && req.body.is_class_teacher === true;
-    const classCode = isClassTeacher ? String(req.body.class_code || '').trim() : '';
-    if (isClassTeacher && !classCode) return bad(res, 'Choose a class for this class teacher.');
-    const emailAddress = email.trim().toLowerCase();
-    if (await one('SELECT id FROM users WHERE LOWER(email) = ?', [emailAddress])) return bad(res, 'An account with this email already exists.', 409);
-    const passwordHash = await bcrypt.hash(password, 10);
+    const fields = await validStaffDetails(req.body, role);
+    if (fields.error) return bad(res, fields.error, fields.status || 400);
+    if (await one('SELECT id FROM users WHERE LOWER(email) = LOWER(?)', [fields.email])) return bad(res, 'An account with this email already exists.', 409);
     const connection = await pool.getConnection();
+    let id;
     try {
       await connection.beginTransaction();
-      if (isClassTeacher) {
-        const [classes] = await connection.query('SELECT class_code, class_teacher_id FROM classes WHERE class_code = ? FOR UPDATE', [classCode]);
-        if (!classes[0]) {
-          await connection.rollback();
-          return bad(res, 'The selected class does not exist.', 400);
-        }
-        if (classes[0].class_teacher_id != null) {
-          await connection.rollback();
-          return bad(res, 'The selected class already has a class teacher. Choose another class.', 409);
-        }
-      }
-      const [inserted] = await connection.query(
-        "INSERT INTO users (email, password, name, role, status, teacher_unit, department) VALUES (?, ?, ?, ?, 'active', ?, ?)",
-        [emailAddress, passwordHash, name.trim(), role, teacherUnit || null, department || null]);
-      if (isClassTeacher) {
-        const [updated] = await connection.query('UPDATE classes SET class_teacher_id = ? WHERE class_code = ? AND class_teacher_id IS NULL', [inserted.insertId, classCode]);
-        if (updated.affectedRows !== 1) {
-          await connection.rollback();
-          return bad(res, 'The selected class already has a class teacher. Choose another class.', 409);
-        }
-      }
+      const [result] = await connection.query(
+        "INSERT INTO users (email, password, name, role, status, department, teacher_unit) VALUES (?, ?, ?, ?, 'active', ?, ?)",
+        [fields.email, await bcrypt.hash(password, 10), fields.name, role, fields.department, fields.teacherUnit]
+      );
+      id = result.insertId;
+      if (fields.classCode) await connection.query('UPDATE classes SET class_teacher_id = ? WHERE class_code = ?', [id, fields.classCode]);
       await connection.commit();
-      res.status(201).json({ id: inserted.insertId, message: `${name.trim()} added as ${role}. Give them the password; they can sign in straight away.` });
     } catch (err) {
       await connection.rollback();
-      if (err.code === 'ER_DUP_ENTRY' || String(err.code || '').startsWith('SQLITE_CONSTRAINT')) return bad(res, 'An account with this email already exists.', 409);
       throw err;
     } finally {
       connection.release();
     }
+    res.status(201).json({ id, message: `${fields.name} added as ${role}. Give them the password; they can sign in straight away.` });
+  }),
+  staffUpdate: wrap(async (req, res) => {
+    const u = await staffById(req.params.id);
+    if (!u) return bad(res, 'Staff member not found.', 404);
+    const fields = await validStaffDetails(req.body, u.role, u.id);
+    if (fields.error) return bad(res, fields.error, fields.status || 400);
+    if (await one('SELECT id FROM users WHERE LOWER(email) = LOWER(?) AND id <> ?', [fields.email, u.id])) return bad(res, 'An account with this email already exists.', 409);
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      await connection.query('UPDATE users SET name = ?, email = ?, department = ?, teacher_unit = ? WHERE id = ?', [
+        fields.name, fields.email, fields.department, fields.teacherUnit, u.id,
+      ]);
+      if (u.role === 'teacher') {
+        await connection.query('UPDATE classes SET class_teacher_id = NULL WHERE class_teacher_id = ?', [u.id]);
+        if (fields.classCode) await connection.query('UPDATE classes SET class_teacher_id = ? WHERE class_code = ?', [u.id, fields.classCode]);
+      }
+      await connection.commit();
+    } catch (err) {
+      await connection.rollback();
+      throw err;
+    } finally {
+      connection.release();
+    }
+    res.json({ message: `${fields.name}'s staff details updated.` });
+  }),
+  staffDelete: wrap(async (req, res) => {
+    const u = await staffById(req.params.id);
+    if (!u) return bad(res, 'Staff member not found.', 404);
+    if (u.id === req.user.id) return bad(res, 'You cannot delete your own administrator account.', 400);
+    const connection = await pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      await connection.query('UPDATE classes SET class_teacher_id = NULL WHERE class_teacher_id = ?', [u.id]);
+      await connection.query('DELETE FROM users WHERE id = ?', [u.id]);
+      await connection.commit();
+    } catch (err) {
+      await connection.rollback();
+      throw err;
+    } finally {
+      connection.release();
+    }
+    res.json({ message: `${u.name}'s staff account was permanently deleted.` });
+  }),
+  activity: wrap(async (req, res) => {
+    const rows = await q(`SELECT id, actor_name, actor_role, action_method, action_route, status_code, created_at
+      FROM activity_logs ORDER BY id DESC LIMIT 300`);
+    res.json(rows.map((row) => ({
+      id: row.id, actor: row.actor_name, role: row.actor_role, method: row.action_method,
+      route: row.action_route, status: Number(row.status_code),
+      time: `${fmtDate(row.created_at)} ${fmtTime(row.created_at)}`,
+    })));
   }),
   staffDecision: wrap(async (req, res) => {
     const decision = req.body.decision === 'approve' ? 'approve' : req.body.decision === 'reject' ? 'reject' : null;
@@ -1246,18 +1285,18 @@ export const admin = {
 // =========================================================================================
 const DAY3 = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MON3 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const dayLabel = (d) => `${DAY3[d.getUTCDay()]} ${String(d.getUTCDate()).padStart(2, '0')} ${MON3[d.getUTCMonth()]}`;
+const dayLabel = (d) => `${DAY3[d.getDay()]} ${String(d.getDate()).padStart(2, '0')} ${MON3[d.getMonth()]}`;
 const isoDay = (d) => sqlDate(d).slice(0, 10);
 
 // Monday 00:00 of the week containing `week` (YYYY-MM-DD, default today) .. the following Monday
 function weekBounds(week) {
   if (week && !/^\d{4}-\d{2}-\d{2}$/.test(week)) return null;
-  const base = week ? new Date(`${week}T00:00:00Z`) : nairobiDate(new Date());
+  const base = week ? new Date(`${week}T00:00:00`) : new Date();
   if (Number.isNaN(base.getTime())) return null;
-  base.setUTCHours(0, 0, 0, 0);
-  const mon = new Date(base); mon.setUTCDate(base.getUTCDate() - ((base.getUTCDay() + 6) % 7));
-  const next = new Date(mon); next.setUTCDate(mon.getUTCDate() + 7);
-  const sun = new Date(mon); sun.setUTCDate(mon.getUTCDate() + 6);
+  base.setHours(0, 0, 0, 0);
+  const mon = new Date(base); mon.setDate(base.getDate() - ((base.getDay() + 6) % 7));
+  const next = new Date(mon); next.setDate(mon.getDate() + 7);
+  const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
   return { mon, next, sun };
 }
 
@@ -1270,13 +1309,17 @@ const SLOTS = [
 ];
 // A lesson belongs to the slot whose start is the latest one at most 30 minutes after the lesson began
 // (reps start the QR a little early or late). Before 7:30 it counts as the first slot, after 3:05 pm the last.
-const slotIndex = (d) => { const t = d.getUTCHours() * 60 + d.getUTCMinutes(); let k = 0; SLOTS.forEach((s, i) => { if (t >= s.start - 30) k = i; }); return k; };
-const hhmm = (v) => { const d = nairobiDate(v); return Number.isNaN(d.getTime()) ? null : `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`; }; // null (printed blank) for a missing/garbled time
-const hhmmSeconds = (v) => { const d = nairobiDate(v); return Number.isNaN(d.getTime()) ? null : `${hhmm(v)}:${String(d.getUTCSeconds()).padStart(2, '0')}`; };
-const shortDate = (d) => `${d.getUTCDate()} ${MON3[d.getUTCMonth()]}`;
+const slotIndex = (d) => { const t = d.getHours() * 60 + d.getMinutes(); let k = 0; SLOTS.forEach((s, i) => { if (t >= s.start - 30) k = i; }); return k; };
+const hhmm = (v) => { const d = asDate(v); return Number.isNaN(d.getTime()) ? null : `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; }; // null (printed blank) for a missing/garbled time
+const hhmmSeconds = (v) => { const d = asDate(v); return Number.isNaN(d.getTime()) ? null : `${hhmm(v)}:${String(d.getSeconds()).padStart(2, '0')}`; };
+const shortDate = (d) => `${d.getDate()} ${MON3[d.getMonth()]}`;
 const FORM_NO = 'MTTI/REG/CUR/01';
 const DAY_NAMES = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY'];
 const LOGO_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../assets/mtti-logo.png');
+const PUBLIC_INSTITUTION_LOGO_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../frontend/public/icons/logo.png');
+const PACKAGED_INSTITUTION_LOGO_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../assets/institution-logo.png');
+const MINISTRY_ICON_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../frontend/public/icons/Ministry icon.png');
+const PACKAGED_MINISTRY_ICON_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../assets/ministry-icon.png');
 const generatedAt = (date) => `${new Intl.DateTimeFormat('en-GB', {
   timeZone: 'Africa/Nairobi', day: '2-digit', month: 'short', year: 'numeric',
   hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true,
@@ -1285,11 +1328,10 @@ const generatedAt = (date) => `${new Intl.DateTimeFormat('en-GB', {
 async function buildWeeklySheet(cc, week) {
   const b = weekBounds(week);
   if (!b) return null;
-  const cls = await one(`SELECT c.course, c.module, c.department, teacher.name AS class_teacher,
-      teacher.teacher_unit AS class_teacher_subject
+  const cls = await one(`SELECT c.course, c.module, c.department, teacher.name AS class_teacher
     FROM classes c LEFT JOIN users teacher ON teacher.id = c.class_teacher_id AND teacher.role = 'teacher'
     WHERE c.class_code = ?`, [cc]);
-  const sessions = await q('SELECT * FROM sessions WHERE class_code = ? AND start_time >= ? AND start_time < ? ORDER BY start_time, id', [cc, sqlDate(new Date(b.mon.getTime() - NAIROBI_OFFSET_MS)), sqlDate(new Date(b.next.getTime() - NAIROBI_OFFSET_MS))]);
+  const sessions = await q('SELECT * FROM sessions WHERE class_code = ? AND start_time >= ? AND start_time < ? ORDER BY start_time, id', [cc, sqlDate(b.mon), sqlDate(b.next)]);
   const roster = await classStudents(cc);
   const marks = new Map(); // `${session}|${adm}` -> 'P' | 'L'
   if (sessions.length) {
@@ -1319,7 +1361,7 @@ async function buildWeeklySheet(cc, week) {
   const subjectsBySlot = new Map();
   const classCells = new Map();
   for (const s of sessions) {
-    const st = nairobiDate(s.start_time), day = (st.getUTCDay() + 6) % 7;
+    const st = asDate(s.start_time), day = (st.getDay() + 6) % 7;
     if (day > 4) continue;
     const key = day * 4 + slotIndex(st);
     const subjectsAtSlot = subjectsBySlot.get(key) || new Set();
@@ -1337,7 +1379,7 @@ async function buildWeeklySheet(cc, week) {
   const subjects = [...groups.values()].map((g) => {
     const cells = new Map();
     for (const s of g.list) {
-      const st = nairobiDate(s.start_time), day = (st.getUTCDay() + 6) % 7;
+      const st = asDate(s.start_time), day = (st.getDay() + 6) % 7;
       if (day > 4) { weekendSkipped++; continue; } // the register has Monday-Friday columns only
       const slot = slotIndex(st), key = day * 4 + slot;
       const c = cells.get(key) || { day, slot, ids: [], timeIn: null, timeOut: null, signed: true, allEnded: true };
@@ -1370,23 +1412,22 @@ async function buildWeeklySheet(cc, week) {
     })),
   };
 
-  const friday = new Date(b.mon); friday.setUTCDate(b.mon.getUTCDate() + 4);
+  const friday = new Date(b.mon); friday.setDate(b.mon.getDate() + 4);
   return {
     classCode: cc, course: cls ? `${cls.course} · ${cls.module}` : '', department: cls?.department || '',
     classTeacher: cls?.class_teacher || '',
-    classTeacherSubject: cls?.class_teacher_subject || '',
     subjectsBySlot: [...subjectsBySlot.entries()].map(([slot, units]) => ({ slot, units: [...units].sort((a, b) => a.localeCompare(b)).join(' / ') })),
     classRegister,
     weekStart: isoDay(b.mon), weekEnd: isoDay(b.sun), weekLabel: `${dayLabel(b.mon)} - ${dayLabel(b.sun)} ${b.sun.getFullYear()}`,
     weekNumber, dateFrom: shortDate(b.mon), dateTo: shortDate(friday), year: b.mon.getFullYear(), weekendSkipped,
-    sessions: sessions.map((s, i) => ({ n: i + 1, id: s.id, label: `${dayLabel(nairobiDate(s.start_time))} ${fmtTime(s.start_time)}`, unit: s.unit_name, lecturer: s.lecturer_name, signed: !!s.signed_at })),
+    sessions: sessions.map((s, i) => ({ n: i + 1, id: s.id, label: `${dayLabel(asDate(s.start_time))} ${fmtTime(s.start_time)}`, unit: s.unit_name, lecturer: s.lecturer_name, signed: !!s.signed_at })),
     students, subjects,
     totals: { students: students.length, sessions: sessions.length, presentStudents: students.filter((s) => s.present > 0).length, perfect: sessions.length ? students.filter((s) => s.absent === 0).length : 0 },
   };
 }
 
-// Draws the official register (landscape A4): green ticks for present, red crosses for absent, and blanks
-// where no lesson was held, followed by TEACHER'S SIGN and H.O.D'S COMMENTS.
+// Draws the official register (landscape A4): logo + header fields, the 5-day x 4-slot grid, a tick for present,
+// a cross for absent, blank where no lesson was held, then TEACHER'S SIGN and H.O.D'S COMMENTS.
 function sendRegisterPdf(res, sh, filename) {
   const doc = new PDFDocument({ autoFirstPage: false, size: 'A4', layout: 'landscape', margin: 0 });
   res.setHeader('Content-Type', 'application/pdf');
@@ -1407,8 +1448,8 @@ function sendRegisterPdf(res, sh, filename) {
     const th = doc.heightOfString(text, { width: w - 3, align });
     doc.text(text, x + 1.5, y + Math.max(1, (h - th) / 2), { width: w - 3, height: h, align, ellipsis: true });
   };
-  const tick = (cx, cy, scale = 1) => doc.save().lineWidth(1.3 * scale).lineCap('round').lineJoin('round').strokeColor('#15803d').moveTo(cx - 4.5 * scale, cy + 0.5 * scale).lineTo(cx - 1.5 * scale, cy + 3.8 * scale).lineTo(cx + 5 * scale, cy - 3.8 * scale).stroke().restore();
-  const cross = (cx, cy, scale = 1) => doc.save().lineWidth(1.1 * scale).lineCap('round').strokeColor('#dc2626').moveTo(cx - 3.5 * scale, cy - 3.5 * scale).lineTo(cx + 3.5 * scale, cy + 3.5 * scale).moveTo(cx + 3.5 * scale, cy - 3.5 * scale).lineTo(cx - 3.5 * scale, cy + 3.5 * scale).stroke().restore();
+  const tick = (cx, cy, scale = 1) => doc.save().lineWidth(1.3 * scale).lineCap('round').lineJoin('round').strokeColor(BLACK).moveTo(cx - 4.5 * scale, cy + 0.5 * scale).lineTo(cx - 1.5 * scale, cy + 3.8 * scale).lineTo(cx + 5 * scale, cy - 3.8 * scale).stroke().restore();
+  const cross = (cx, cy, scale = 1) => doc.save().lineWidth(1.1 * scale).lineCap('round').strokeColor(BLACK).moveTo(cx - 3.5 * scale, cy - 3.5 * scale).lineTo(cx + 3.5 * scale, cy + 3.5 * scale).moveTo(cx + 3.5 * scale, cy - 3.5 * scale).lineTo(cx - 3.5 * scale, cy + 3.5 * scale).stroke().restore();
   const field = (name, value, x, y, w) => { // "NAME: ______value______" like the printed form
     doc.font('Helvetica-Bold').fontSize(8.5).fillColor(BLACK);
     const lw = doc.widthOfString(name) + 4;
@@ -1433,10 +1474,9 @@ function sendRegisterPdf(res, sh, filename) {
     x = field('DEPARTMENT:', sh.department, x, 70, 205);
     field('YEAR:', sh.year, x, 70, 66);
     x = 100;
-    x = field('CLASS TEACHER:', sh.classTeacher, x, 88, 225);
-    x = field('TEACHER UNIT/SUBJECT:', sh.classTeacherSubject, x, 88, 250);
+    x = field('CLASS TEACHER :', sh.classTeacher, x, 88, 280);
     const allSubjects = [...new Set(sh.subjects.map((subject) => subject.unit).filter(Boolean))].join(' / ');
-    field('SUBJECTS THIS WEEK:', allSubjects, x, 88, 225);
+    field('SUBJECT :', allSubjects, x, 88, 405);
 
     const y0 = tableTop, yIn = y0 + hDay + hTime, yOut = yIn + hIn, ySubject = yOut + hOut, yLab = ySubject + hSubject, yBody = y0 + headH;
     box(L, y0, wSN, headH); label('S/N\nO', L, y0, wSN, headH, { size: 7, bold: true });
@@ -1536,7 +1576,7 @@ export const notifications = wrap(async (req, res) => {
   const role = req.user.role, items = [];
   const add = (id, kind, icon, title, text, link, when) => items.push({ id, kind, icon, title, text, link, when: when ? `${fmtDate(when)} ${fmtTime(when)}` : null });
   const count = async (sql, params = []) => (await one(sql, params)).n;
-  const weekend = (() => { const d = nairobiDate(new Date()).getUTCDay(); return d === 5 || d === 6 || d === 0; })(); // Friday to Sunday
+  const weekend = (() => { const d = new Date().getDay(); return d === 5 || d === 6 || d === 0; })(); // Friday to Sunday
 
   if (role === 'student' || role === 'student_rep') {
     const st = await me(req);

@@ -176,7 +176,10 @@ export function ChatRoom({ basePath }) {
                         {m.reply && <div className={`mb-2 rounded-lg border-l-2 px-2 py-1 text-xs ${m.mine ? 'border-blue-200 bg-white/10 text-blue-100' : 'border-blue-400 bg-blue-50 text-slate-600'}`}><strong>{m.reply.sender}</strong><p className="truncate">{m.reply.text}</p></div>}
                         {m.text && <p className="whitespace-pre-wrap break-words">{m.text}</p>}
                         {m.attachment && <ChatAttachment attachment={m.attachment} />}
-                        <p className={`mt-1 text-right text-[10px] ${m.mine ? 'text-blue-100' : 'text-slate-400'}`}>{chatTime(m)}{m.edited ? ' · edited' : ''}</p>
+                        <p className={`mt-1 text-right text-[10px] ${m.mine ? 'text-blue-100' : 'text-slate-400'}`}>
+                          {chatTime(m)}{m.edited ? ' · edited' : ''}
+                          {m.mine && <span className="ml-1 font-bold" title="Sent to the server" aria-label="Message sent">✓✓</span>}
+                        </p>
                       </div>
                       <div className={`mt-1 flex flex-wrap gap-2 text-[11px] transition-all ${activeActions === m.id ? 'max-h-10 opacity-100' : 'max-h-0 overflow-hidden opacity-0'}`}>
                         <button type="button" onClick={() => replyTo(m)} className="rounded-full bg-white px-2.5 py-1 font-semibold text-blue-700 shadow-sm">Reply</button>

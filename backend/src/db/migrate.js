@@ -4,8 +4,6 @@ import pool from '../config/db.js';
 // schema changes are ignored; other errors must stop startup.
 const statements = [
   "ALTER TABLE users ADD COLUMN status VARCHAR(20) DEFAULT 'active'",
-  'ALTER TABLE users ADD COLUMN teacher_unit VARCHAR(150) NULL',
-  'ALTER TABLE users ADD COLUMN department VARCHAR(100) NULL',
   'ALTER TABLE sessions ADD COLUMN signed_by INT NULL',
   'ALTER TABLE sessions ADD COLUMN signed_at DATETIME NULL',
   'ALTER TABLE sessions ADD COLUMN venue VARCHAR(100) NULL',
@@ -19,14 +17,12 @@ const statements = [
      setting_value VARCHAR(255)
    ) ENGINE=InnoDB`,
   'ALTER TABLE chat_messages ADD COLUMN is_announcement TINYINT DEFAULT 0',
-  'ALTER TABLE chat_messages ADD COLUMN reply_to INT NULL',
-  'ALTER TABLE chat_messages ADD COLUMN edited_at DATETIME NULL',
-  'ALTER TABLE chat_messages ADD COLUMN attachment_path VARCHAR(255) NULL',
-  'ALTER TABLE chat_messages ADD COLUMN attachment_name VARCHAR(255) NULL',
-  'ALTER TABLE chat_messages ADD COLUMN attachment_type VARCHAR(100) NULL',
-  'ALTER TABLE chat_messages ADD COLUMN attachment_size INT NULL',
   'ALTER TABLE temp_id_requests ADD COLUMN reason VARCHAR(255) NULL',
   'ALTER TABLE users ADD COLUMN token_version INT NOT NULL DEFAULT 0', // bumped on every password change: older logins stop working
+  'ALTER TABLE users ADD COLUMN manual_attendance_pin_hash VARCHAR(255) NULL',
+  'ALTER TABLE users ADD COLUMN manual_attendance_pin_version INT NOT NULL DEFAULT 0',
+  'ALTER TABLE users ADD COLUMN department VARCHAR(100) NULL',
+  'ALTER TABLE users ADD COLUMN teacher_unit VARCHAR(150) NULL',
   'ALTER TABLE timetable_versions ADD COLUMN file_name VARCHAR(255) NULL',
   'ALTER TABLE timetable_versions ADD COLUMN file_path VARCHAR(255) NULL',
   'ALTER TABLE timetable_versions ADD COLUMN file_type VARCHAR(100) NULL',
@@ -38,6 +34,17 @@ const statements = [
      paid_amount INT NOT NULL DEFAULT 0,
      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
    ) ENGINE=InnoDB`,
+  `CREATE TABLE IF NOT EXISTS activity_logs (
+     id INT AUTO_INCREMENT PRIMARY KEY,
+     actor_id INT NULL,
+     actor_name VARCHAR(150) NOT NULL,
+     actor_role VARCHAR(30) NOT NULL,
+     action_method VARCHAR(10) NOT NULL,
+     action_route VARCHAR(255) NOT NULL,
+     status_code INT NOT NULL,
+     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+   ) ENGINE=InnoDB`,
+  'CREATE INDEX idx_activity_logs_created_at ON activity_logs (created_at)',
   // One check-in per student per session (also enforced in code)
   'CREATE UNIQUE INDEX uq_attendance_session_adm ON attendance_logs (session_id, adm_no)',
 ];

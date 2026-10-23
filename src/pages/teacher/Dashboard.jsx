@@ -18,6 +18,7 @@ export default function TeacherDashboard() {
             </div>
             <LinkGrid Link={Link} items={[
               { to: '/teacher/sign-attendance', icon: '✍️', label: 'Sign attendance', hint: 'Confirm lessons' },
+              { to: '/teacher/absent', icon: '📋', label: 'Absent trainees', hint: 'Review a selected lesson' },
               { to: '/teacher/absenteeism', icon: '📉', label: 'Absenteeism by unit' },
             ]} />
           </>

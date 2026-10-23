@@ -47,8 +47,9 @@ export const NAV_BY_ROLE = {
   [TEACHER]: [
     { to: '/teacher/dashboard', label: 'Home' },
     { to: '/teacher/sign-attendance', label: 'Sign Attendance' },
+    { to: '/teacher/absent', label: 'Absent' },
     { to: '/teacher/absenteeism', label: 'Absenteeism' },
-    ...campusLinks,
+    ...campusLinks.filter((link) => link.to !== '/campus/fees'),
   ],
   [HOD]: [
     { to: '/hod/dashboard', label: 'Home' },
@@ -69,6 +70,7 @@ NAV_BY_ROLE[ADMIN] = [
   { to: '/admin/dashboard', label: 'Admin Home' },
   { to: '/admin/classes', label: 'Classes' },
   { to: '/admin/staff', label: 'Staff' },
+  { to: '/admin/activity', label: 'Activity Log' },
   { to: '/admin/settings', label: 'Settings' },
   ...NAV_BY_ROLE[HOD].slice(1),
 ];

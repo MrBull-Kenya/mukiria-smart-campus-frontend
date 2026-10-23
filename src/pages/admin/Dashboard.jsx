@@ -26,6 +26,7 @@ export default function AdminDashboard() {
             <LinkGrid Link={Link} items={[
               { to: '/admin/classes', icon: '🏫', label: 'Classes', hint: 'Add or remove classes' },
               { to: '/admin/staff', icon: '👥', label: 'Staff accounts', hint: 'Approve, add, deactivate' },
+              { to: '/admin/activity', icon: '🕒', label: 'Live activity log', hint: 'See recent account actions' },
               { to: '/admin/settings', icon: '⚙️', label: 'Settings', hint: 'Term start date' },
               { to: '/hod/dashboard', icon: '📊', label: 'Department overview', hint: 'Reports and attendance' },
             ]} />
