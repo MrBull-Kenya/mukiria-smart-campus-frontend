@@ -5,6 +5,7 @@ import { requireRole } from '../middleware/authMiddleware.js';
 import { one } from '../utils/dbHelpers.js';
 import { QR_SCAN_RADIUS_METERS } from '../config/mttiGPS.js';
 import { allow } from '../utils/rateLimit.js';
+import { activeActingRepForClass, activeActingRepById } from '../utils/actingRep.js';
 
 const router = express.Router();
 const repCodes = new Map();
@@ -20,8 +21,14 @@ function issueRepCode(userId, sessionId, token) {
 }
 
 // POST /api/qr/generate  (class rep) -> signed rotating token for the rep's ACTIVE session
-router.post('/generate', requireRole('student_rep', 'admin'), async (req, res) => {
+router.post('/generate', async (req, res) => {
   try {
+    if (req.user.role !== 'student_rep' && req.user.role !== 'admin') {
+      if (req.user.role !== 'student') return res.status(403).json({ success: false, message: 'Only a class representative may generate the class QR.' });
+      const acting = await activeActingRepForClass(req.user.id, req.user.class_code);
+      if (!acting) return res.status(403).json({ success: false, message: 'You do not have an active Acting Rep appointment.' });
+      req.actingRepAssignment = acting;
+    }
     const { session_id, venue } = req.body;
     if (!session_id) return res.status(400).json({ success: false, message: 'session_id is required. Start a session first.' });
 
@@ -36,6 +43,10 @@ router.post('/generate', requireRole('student_rep', 'admin'), async (req, res) =
     if (req.user.role !== 'admin' && session.class_code !== req.user.class_code) {
       return res.status(403).json({ success: false, message: 'This session belongs to another class.' });
     }
+    if (req.actingRepAssignment && (req.actingRepAssignment.class_code !== session.class_code ||
+        Number(req.actingRepAssignment.session_id) !== Number(session.id))) {
+      return res.status(403).json({ success: false, message: 'This session is outside your Acting Rep appointment.' });
+    }
 
     const rep_id = req.user.adm_no || req.user.id;
     const result = generateSecureToken(
@@ -43,7 +54,8 @@ router.post('/generate', requireRole('student_rep', 'admin'), async (req, res) =
       rep_id,
       venue || session.venue || 'Lecture room',
       session.id,
-      { latitude: qrLat, longitude: qrLng }
+      { latitude: qrLat, longitude: qrLng },
+      req.actingRepAssignment?.id
     );
     const rep_checkin_code = req.user.role === 'student_rep'
       ? issueRepCode(req.user.id, session.id, result.token)
@@ -105,6 +117,9 @@ router.post('/verify', async (req, res) => {
 
     const session = await one('SELECT id, is_active FROM sessions WHERE id = ?', [v.data.session_id]);
     if (!session || !session.is_active) return res.status(400).json({ success: false, message: 'This class session has ended.' });
+    if (v.data.acting_assignment_id && !(await activeActingRepById(v.data.acting_assignment_id, session.id))) {
+      return res.status(403).json({ success: false, message: 'This Acting Rep appointment has expired or been revoked.' });
+    }
     res.json({ success: true, message: `QR token verified. Students must be within ${QR_SCAN_RADIUS_METERS} m of the QR location.`, data: v.data });
   } catch (err) {
     console.error('QR verification error:', err);

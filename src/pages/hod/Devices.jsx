@@ -7,12 +7,17 @@ export default function HodDevices() {
   const classes = useFetch('/hod/classes');
   const [typed, setTyped] = useState('');
   const [search, setSearch] = useState('');
+  const [department, setDepartment] = useState('');
   const [cls, setCls] = useState('');
   const [msg, setMsg] = useState(null);
 
   useEffect(() => { const t = setTimeout(() => setSearch(typed.trim()), 300); return () => clearTimeout(t); }, [typed]); // wait for the typing to pause
+  const departments = [...new Set((classes.data || []).map((item) => String(item.department || '').trim()).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b));
+  const visibleClasses = (classes.data || []).filter((item) => !department || item.department === department);
   const qs = new URLSearchParams();
   if (cls) qs.set('class_code', cls);
+  if (department) qs.set('department', department);
   if (search) qs.set('search', search);
   const state = useFetch(`/hod/devices${qs.toString() ? `?${qs}` : ''}`);
 
@@ -31,14 +36,21 @@ export default function HodDevices() {
       </Notice>
       <Card className="flex flex-wrap items-end gap-3">
         <label className="block flex-1 min-w-[14rem]">
-          <span className="block text-xs font-bold text-gray-700 mb-1">Find a student</span>
+          <span className="block text-xs font-bold text-gray-700 mb-1">Find a trainee or class rep</span>
           <input value={typed} onChange={(e) => setTyped(e.target.value)} placeholder="Name, admission number or email" className="w-full bg-gray-50 border border-gray-300 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-blue-500" />
+        </label>
+        <label className="block">
+          <span className="block text-xs font-bold text-gray-700 mb-1">Department</span>
+          <select value={department} onChange={(e) => { setDepartment(e.target.value); setCls(''); }} className="bg-gray-50 border border-gray-300 rounded-xl px-3 py-2.5 text-sm">
+            <option value="">All departments</option>
+            {departments.map((item) => <option key={item} value={item}>{item}</option>)}
+          </select>
         </label>
         <label className="block">
           <span className="block text-xs font-bold text-gray-700 mb-1">Class</span>
           <select value={cls} onChange={(e) => setCls(e.target.value)} className="bg-gray-50 border border-gray-300 rounded-xl px-3 py-2.5 text-sm">
             <option value="">All classes</option>
-            {(classes.data || []).map((c) => <option key={c.code} value={c.code}>{c.code}</option>)}
+            {visibleClasses.map((c) => <option key={c.code} value={c.code}>{c.code}</option>)}
           </select>
         </label>
       </Card>
@@ -49,7 +61,7 @@ export default function HodDevices() {
             {d.truncated && <Notice kind="warn">Showing the first 200 matches. Type a name or admission number to narrow it down.</Notice>}
             <Table rows={d.students} empty="No students match." columns={[
               { key: 'name', label: 'Name', render: (r) => <>{r.name}{r.role === 'student_rep' && <span className="ml-1 text-[10px] text-blue-600 font-bold">REP</span>}</> },
-              { key: 'adm', label: 'Adm no' }, { key: 'classCode', label: 'Class' }, { key: 'email', label: 'Email' },
+              { key: 'adm', label: 'Adm no' }, { key: 'department', label: 'Department' }, { key: 'classCode', label: 'Class' }, { key: 'email', label: 'Email' },
               { key: 'registered', label: 'Registered device', render: (r) => r.registered ? <span><Badge tone="green">Registered</Badge> <span className="text-[11px] text-gray-500">{r.since}</span></span> : <Badge tone="gray">Not registered yet</Badge> },
               { key: 'a', label: '', render: (r) => <Btn variant="ghost" disabled={!r.registered} onClick={() => reset(r)}>Reset device</Btn> },
             ]} />

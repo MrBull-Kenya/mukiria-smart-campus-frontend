@@ -15,7 +15,11 @@ const base64UrlToBytes = (value) => {
   return Uint8Array.from(raw, (character) => character.charCodeAt(0));
 };
 
-const TONE = { warn: 'border-amber-200 bg-amber-50', ok: 'border-emerald-200 bg-emerald-50', info: 'border-gray-200 bg-white' };
+const TONE = {
+  warn: 'bg-amber-50 text-amber-700 ring-amber-100',
+  ok: 'bg-emerald-50 text-emerald-700 ring-emerald-100',
+  info: 'bg-blue-50 text-blue-700 ring-blue-100',
+};
 
 // What the background notification button shows: unsupported | insecure | default | denied | granted-on | granted-off
 export const ALERT_LABEL = {
@@ -28,37 +32,49 @@ export const ALERT_LABEL = {
 export function NotificationPanel({ items, readIds, alertsState, loading, error, pushMessage, pushBusy, onOpenItem, onMarkAll, onToggleAlerts }) {
   const unread = items.filter((i) => !readIds.has(i.id)).length;
   return (
-    <div className="bg-white border border-gray-200 rounded-2xl shadow-xl overflow-hidden" role="dialog" aria-label="Notifications">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
-        <p className="text-sm font-black text-gray-900">Notifications{unread ? ` (${unread} new)` : ''}</p>
-        <button type="button" onClick={onMarkAll} disabled={unread === 0} className="text-[11px] font-bold text-blue-600 underline disabled:text-gray-300 disabled:no-underline">Mark all read</button>
+    <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl shadow-slate-900/15" role="dialog" aria-label="Notifications">
+      <div className="flex items-center justify-between gap-3 border-b border-slate-100 bg-gradient-to-r from-blue-50 via-white to-white px-4 py-3.5">
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-700 text-white shadow-sm"><Icon name="notifications" className="h-4 w-4" /></span>
+          <div>
+            <p className="text-sm font-extrabold text-slate-900">Notifications</p>
+            <p className="text-[11px] text-slate-500">{unread ? `${unread} unread update${unread === 1 ? '' : 's'}` : 'You’re all caught up'}</p>
+          </div>
+        </div>
+        <button type="button" onClick={onMarkAll} disabled={unread === 0} className="shrink-0 rounded-lg px-2 py-1.5 text-[11px] font-bold text-blue-700 transition hover:bg-blue-50 disabled:text-slate-300 disabled:hover:bg-transparent">Mark all read</button>
       </div>
-      <div className="max-h-[22rem] overflow-y-auto divide-y divide-gray-100">
-        {error && <p className="p-4 text-xs text-rose-600">{error}</p>}
-        {!error && loading && items.length === 0 && <p className="p-4 text-xs text-gray-500">Loading…</p>}
-        {!error && !loading && items.length === 0 && <p className="p-6 text-center text-sm text-gray-500">You're all caught up 🎉</p>}
+      <div className="max-h-[24rem] divide-y divide-slate-100 overflow-y-auto">
+        {error && <p role="alert" className="m-3 rounded-xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-700">{error}</p>}
+        {!error && loading && items.length === 0 && <p className="p-6 text-center text-xs font-medium text-slate-500">Loading your latest updates…</p>}
+        {!error && !loading && items.length === 0 && (
+          <div className="px-5 py-8 text-center">
+            <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-emerald-50 text-2xl ring-1 ring-inset ring-emerald-100" aria-hidden="true">✓</span>
+            <p className="mt-3 text-sm font-bold text-slate-800">All caught up</p>
+            <p className="mt-1 text-xs text-slate-500">Important campus updates will appear here.</p>
+          </div>
+        )}
         {items.map((i) => {
           const isNew = !readIds.has(i.id);
           return (
-            <Link key={i.id} to={i.link} onClick={() => onOpenItem(i)} className={`flex gap-3 px-4 py-3 border-l-4 hover:brightness-95 transition ${TONE[i.kind] || TONE.info} ${isNew ? '' : 'opacity-60'}`}>
-              <span className="text-xl leading-none pt-0.5">{i.icon}</span>
+            <Link key={i.id} to={i.link} onClick={() => onOpenItem(i)} className={`flex gap-3 px-4 py-3.5 transition-colors hover:bg-slate-50 ${isNew ? 'bg-white' : 'bg-slate-50/60'}`}>
+              <span className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-lg ring-1 ring-inset ${TONE[i.kind] || TONE.info}`}>{i.icon}</span>
               <span className="min-w-0 flex-1">
-                <span className={`block text-xs text-gray-900 ${isNew ? 'font-black' : 'font-semibold'}`}>{i.title}</span>
-                <span className="block text-[11px] text-gray-600 break-words">{i.text}</span>
-                {i.when && <span className="block text-[10px] text-gray-400 mt-0.5">{i.when}</span>}
+                <span className={`block text-xs text-slate-900 ${isNew ? 'font-extrabold' : 'font-semibold'}`}>{i.title}</span>
+                <span className="mt-0.5 block break-words text-[11px] leading-4 text-slate-600">{i.text}</span>
+                {i.when && <span className="mt-1 block text-[10px] font-medium text-slate-400">{i.when}</span>}
               </span>
-              {isNew && <span className="w-2 h-2 rounded-full bg-blue-600 mt-1.5 shrink-0" aria-label="new" />}
+              {isNew && <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full bg-blue-600 ring-4 ring-blue-50" aria-label="Unread" />}
             </Link>
           );
         })}
       </div>
-      <div className="px-4 py-2.5 border-t border-gray-100 bg-gray-50 text-[11px] text-gray-500">
-        {ALERT_LABEL[alertsState] && <button type="button" disabled={pushBusy} onClick={onToggleAlerts} className="font-bold text-gray-700 hover:text-blue-600 disabled:opacity-50">{pushBusy ? 'Updating notification settings…' : ALERT_LABEL[alertsState]}</button>}
-        {alertsState === 'denied' && <span>Notifications are blocked in your browser's site settings.</span>}
-        {alertsState === 'insecure' && <span>Background notifications need a secure (HTTPS) address.</span>}
-        {alertsState === 'unsupported' && <span>This browser does not support background push notifications.</span>}
-        {pushMessage && <p role="alert" className="mt-2 text-rose-700">{pushMessage}</p>}
-        <p className="mt-2">Push alerts can arrive while the app is closed. Your browser and device must allow notifications; iPhone and iPad require the app to be added to the Home Screen.</p>
+      <div className="border-t border-slate-100 bg-slate-50 px-4 py-3">
+        {ALERT_LABEL[alertsState] && <button type="button" disabled={pushBusy} onClick={onToggleAlerts} className="inline-flex min-h-9 w-full items-center justify-center rounded-xl bg-blue-700 px-3 text-xs font-bold text-white shadow-sm transition hover:bg-blue-800 disabled:opacity-50">{pushBusy ? 'Updating notification settings…' : ALERT_LABEL[alertsState]}</button>}
+        {alertsState === 'denied' && <p className="mt-2 text-[11px] text-amber-700">Notifications are blocked in your browser’s site settings.</p>}
+        {alertsState === 'insecure' && <p className="mt-2 text-[11px] text-amber-700">Background notifications need a secure (HTTPS) address.</p>}
+        {alertsState === 'unsupported' && <p className="mt-2 text-[11px] text-slate-500">This browser does not support background push notifications.</p>}
+        {pushMessage && <p role="alert" className="mt-2 text-[11px] text-rose-700">{pushMessage}</p>}
+        <p className="mt-2 text-[10px] leading-4 text-slate-500">Push alerts may arrive while the app is closed. Your browser and device must allow notifications; on iPhone and iPad, add the app to your Home Screen.</p>
       </div>
     </div>
   );
@@ -182,14 +198,14 @@ export default function NotificationBell() {
   return (
     <div className="relative" ref={box}>
       <button type="button" onClick={toggle} aria-label={`Notifications${unread.length ? `, ${unread.length} unread` : ''}`} aria-expanded={open}
-        className="group relative flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white text-blue-800 shadow-sm transition hover:border-blue-300 hover:bg-blue-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600">
-        <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-blue-50 transition-colors group-hover:bg-blue-100">
+        className="group relative flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-blue-800 shadow-sm transition hover:border-blue-300 hover:bg-blue-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600">
+        <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-50 transition-colors group-hover:bg-blue-100">
           <Icon name="notifications" className="h-4 w-4" />
         </span>
-        {unread.length > 0 && <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 flex items-center justify-center bg-rose-600 text-white text-[10px] font-bold rounded-full">{unread.length > 99 ? '99+' : unread.length}</span>}
+        {unread.length > 0 && <span className="absolute -right-1.5 -top-1.5 flex h-[19px] min-w-[19px] items-center justify-center rounded-full bg-rose-600 px-1 text-[10px] font-extrabold text-white ring-2 ring-white">{unread.length > 99 ? '99+' : unread.length}</span>}
       </button>
       {open && (
-        <div className="absolute right-0 mt-2 w-[22rem] max-w-[92vw] z-30">
+        <div className="absolute right-0 z-30 mt-2 w-[24rem] max-w-[92vw]">
           <NotificationPanel items={items} readIds={read} alertsState={alertsState} loading={state.loading} error={state.error} pushMessage={pushMessage} pushBusy={pushBusy}
             onOpenItem={(i) => { markRead([i.id]); setOpen(false); }} onMarkAll={() => markRead(items.map((i) => i.id))} onToggleAlerts={toggleAlerts} />
         </div>

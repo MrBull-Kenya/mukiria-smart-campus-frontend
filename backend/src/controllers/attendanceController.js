@@ -1,8 +1,10 @@
 import { calculateDistance, QR_SCAN_RADIUS_METERS, verifyGeofence } from '../config/mttiGPS.js';
+import pool from '../config/db.js';
 import { verifyToken as verifyQr } from '../utils/qrGenerator.js';
 import { DeviceLockModel } from '../models/DeviceLock.js';
 import { one, q, exec, sqlDate, asDate, pct1 } from '../utils/dbHelpers.js';
 import { passkeyController } from './passkeyController.js';
+import { activeActingRepById } from '../utils/actingRep.js';
 
 export const POINTS_ON_TIME = 15;
 export const POINTS_LATE = 5;
@@ -62,11 +64,14 @@ export const attendanceController = {
       const v = verifyQr(qr_token);
       if (!v.valid) return res.status(400).json({ error: v.reason });
       if (Number(v.data.session_id) !== Number(session.id)) return res.status(400).json({ error: 'QR code does not match this session.' });
+      if (v.data.acting_assignment_id && !(await activeActingRepById(v.data.acting_assignment_id, session.id))) {
+        return res.status(403).json({ error: 'This Acting Rep appointment has expired or been revoked.' });
+      }
 
       // 4. Geofence (FEAT 3)
       const geofence = verifyGeofence(parseFloat(gps_lat), parseFloat(gps_lng));
       if (Number.isNaN(geofence.distanceMeters)) return res.status(400).json({ error: 'GPS coordinates are required.' });
-      if (!geofence.isWithinCampus) {
+      if (req.user.role !== 'student_rep' && !geofence.isWithinCampus) {
         return res.status(403).json({ error: `Check-in rejected. Outside MTTI campus perimeter (${geofence.distanceMeters} m from centre).` });
       }
 
@@ -94,26 +99,34 @@ export const attendanceController = {
         return res.status(409).json({ error: 'You have already checked in for this session.' });
       }
 
-      if (!req.body.passkey_challenge || !req.body.passkey_response) {
-        return res.status(403).json({ error: 'Biometric verification is required to record attendance.' });
+      const [[credential]] = await pool.query(
+        'SELECT credential_hash FROM passkey_credentials WHERE user_id = ? LIMIT 1',
+        [req.user.id]
+      );
+      if (credential) {
+        if (!req.body.passkey_challenge || !req.body.passkey_response) {
+          return res.status(403).json({ error: 'Verify your enrolled passkey to record attendance.' });
+        }
+        let passkeyResponse;
+        try {
+          passkeyResponse = JSON.parse(req.body.passkey_response);
+        } catch {
+          return res.status(400).json({ error: 'The biometric response is invalid. Please verify your passkey again.' });
+        }
+        const biometric = await passkeyController.verifyAttendance({
+          userId: req.user.id,
+          challenge: req.body.passkey_challenge,
+          response: passkeyResponse,
+          sessionId: Number(session.id),
+          qrToken: qr_token,
+          latitude: Number(gps_lat),
+          longitude: Number(gps_lng),
+          deviceId: device_id,
+        });
+        if (!biometric.ok) return res.status(biometric.status).json({ error: biometric.error });
+      } else if (req.body.passkey_challenge || req.body.passkey_response) {
+        return res.status(400).json({ error: 'No passkey is enrolled on this account. Scan the current QR and try again.' });
       }
-      let passkeyResponse;
-      try {
-        passkeyResponse = JSON.parse(req.body.passkey_response);
-      } catch {
-        return res.status(400).json({ error: 'The biometric response is invalid. Please verify your passkey again.' });
-      }
-      const biometric = await passkeyController.verifyAttendance({
-        userId: req.user.id,
-        challenge: req.body.passkey_challenge,
-        response: passkeyResponse,
-        sessionId: Number(session.id),
-        qrToken: qr_token,
-        latitude: Number(gps_lat),
-        longitude: Number(gps_lng),
-        deviceId: device_id,
-      });
-      if (!biometric.ok) return res.status(biometric.status).json({ error: biometric.error });
 
       // 7. Late threshold (FEAT 4).
       let when = new Date();

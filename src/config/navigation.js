@@ -27,7 +27,7 @@ const campusLinks = [
 ];
 
 export const NAV_BY_ROLE = {
-  [STUDENT]: [...studentLinks, ...campusLinks],
+  [STUDENT]: [{ to: '/student/acting-rep', label: 'Acting Rep' }, ...studentLinks, ...campusLinks],
   [REP]: [
     { to: '/rep/dashboard', label: 'Rep Home' },
     { to: '/rep/generate-qr', label: 'Show QR' },
@@ -47,6 +47,7 @@ export const NAV_BY_ROLE = {
   [TEACHER]: [
     { to: '/teacher/dashboard', label: 'Home' },
     { to: '/teacher/sign-attendance', label: 'Sign Attendance' },
+    { to: '/teacher/present', label: 'Present' },
     { to: '/teacher/absent', label: 'Absent' },
     { to: '/teacher/absenteeism', label: 'Absenteeism' },
     ...campusLinks.filter((link) => link.to !== '/campus/fees'),

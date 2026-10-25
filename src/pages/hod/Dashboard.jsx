@@ -1,15 +1,36 @@
-import React from 'react';
-import { Link } from 'react-router-dom';
+import React, { useEffect, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { useAuth } from '../../context/AuthContext';
 import { useFetch } from '../../hooks/useFetch';
-import { Page, Async, Stat, LinkGrid } from '../../components/ui';
+import { Page, Async, Stat, LinkGrid, Card, ErrorBox } from '../../components/ui';
 
 export default function HodDashboard() {
-  const state = useFetch('/hod/dashboard', { pollMs: 30000 });
+  const { user } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [department, setDepartment] = useState(searchParams.get('department') || '');
+  useEffect(() => { setDepartment(searchParams.get('department') || ''); }, [searchParams]);
+  const classes = useFetch('/admin/classes', { enabled: user.role === 'admin' });
+  const state = useFetch(`/hod/dashboard${user.role === 'admin' && department ? `?department=${encodeURIComponent(department)}` : ''}`, { pollMs: 30000 });
+  const departments = [...new Set((classes.data || []).map((item) => String(item.department || '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const changeDepartment = (value) => {
+    setDepartment(value);
+    setSearchParams(value ? { department: value } : {});
+  };
   return (
-    <Page title={state.data ? `Welcome, ${state.data.name}` : 'Dashboard'} subtitle="Department overview">
+    <Page title={state.data ? `Welcome, ${state.data.name}` : 'Dashboard'} subtitle={state.data?.department || 'Department overview'}>
       <Async state={state}>
         {(d) => (
           <>
+            {user.role === 'admin' && classes.error && <ErrorBox error={`Department choices could not be loaded: ${classes.error}`} onRetry={classes.reload} />}
+            {user.role === 'admin' && <Card>
+              <label className="block max-w-sm">
+                <span className="mb-1 block text-xs font-bold text-slate-700">Department</span>
+                <select value={department} onChange={(event) => changeDepartment(event.target.value)} className="w-full rounded-xl border border-slate-300 bg-slate-50 px-3 py-2.5 text-sm">
+                  <option value="">All departments</option>
+                  {departments.map((item) => <option key={item} value={item}>{item}</option>)}
+                </select>
+              </label>
+            </Card>}
             <section aria-label="Department overview" className="grid grid-cols-2 gap-3 md:grid-cols-3">
               <Stat label="Classes" value={d.totalClasses} />
               <Stat label="Students" value={d.totalStudents} />

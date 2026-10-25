@@ -34,11 +34,12 @@ export const verifyToken = async (req, res, next) => {
   req.user = decoded;
   const method = req.method.toUpperCase();
   if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+    const startedAt = Date.now();
     res.on('finish', () => {
       const route = req.route ? `${req.baseUrl}${req.route.path}` : req.originalUrl.split('?')[0];
       pool.query(
-        'INSERT INTO activity_logs (actor_id, actor_name, actor_role, action_method, action_route, status_code) VALUES (?, ?, ?, ?, ?, ?)',
-        [decoded.id, actor.name, actor.role, method, route.slice(0, 255), res.statusCode]
+        'INSERT INTO activity_logs (actor_id, actor_name, actor_role, action_method, action_route, status_code, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [decoded.id, actor.name, actor.role, method, route.slice(0, 255), res.statusCode, Math.max(0, Date.now() - startedAt)]
       ).catch((err) => console.error('Could not persist activity log entry:', err));
     });
   }

@@ -12,11 +12,15 @@ import { q, one, exec, sqlDate, startOfToday, asDate, fmtDate, fmtTime, pct1, AT
 import { awardBadges, POINTS_LATE, POINTS_ON_TIME, recomputeAttendance, recomputeClassAttendance } from './attendanceController.js';
 import { sendEmail, emailTemplates, emailSettings, isEmailConfigured, missingEmailSettings, describeEmailError } from '../config/email.js';
 import { allow } from '../utils/rateLimit.js';
+import { activeActingRepForClass } from '../utils/actingRep.js';
 
 const T = ATTENDANCE_THRESHOLD;
 const HOURS = (h) => new Date(Date.now() + h * 3600 * 1000);
 const DAY_ORDER = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday'];
 const MANUAL_PIN_LIMIT = Number(process.env.MANUAL_ATTENDANCE_PIN_ATTEMPT_LIMIT) || 10;
+const EAT_DATETIME = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Africa/Nairobi', dateStyle: 'medium', timeStyle: 'medium', hour12: true,
+});
 
 // Wrap every handler so a thrown error becomes a clean JSON 500 (details only in the server log)
 export const wrap = (fn) => async (req, res) => {
@@ -77,6 +81,83 @@ const classStudents = (cc) => q(
   `SELECT s.adm_no, s.points, s.attendance_pct, s.parent_email, s.parent_phone, u.id AS user_id, u.name, u.email, u.role
    FROM students s JOIN users u ON u.id = s.user_id WHERE u.class_code = ? AND u.status = 'active' ORDER BY u.name`, [cc]);
 const sessionsHeld = async (cc) => (await one('SELECT COUNT(*) AS n FROM sessions WHERE class_code = ?', [cc])).n;
+const ACTING_REP_HOURS = 6;
+
+async function activeSessionForClass(cc) {
+  const session = await one(
+    `SELECT s.id, s.unit_name, s.lecturer_name, s.venue, s.start_time,
+      (SELECT COUNT(*) FROM attendance_logs l WHERE l.session_id = s.id) AS checked_in
+     FROM sessions s WHERE s.class_code = ? AND s.is_active = 1 ORDER BY s.id DESC LIMIT 1`,
+    [cc]
+  );
+  return session ? {
+    id: session.id, unit: session.unit_name, lecturer: session.lecturer_name,
+    venue: session.venue || '', startedAt: fmtTime(session.start_time), checkedIn: Number(session.checked_in),
+  } : null;
+}
+
+async function startClassSession(classCode, body, actingAssignment) {
+  const { unit_name, lecturer_name, venue, late_threshold_mins } = body;
+  if (!classCode) return { error: 'Your account has no class assigned.', status: 400 };
+  if (!String(unit_name || '').trim() || !String(lecturer_name || '').trim()) return { error: 'Unit and lecturer are required.', status: 400 };
+  const startedAt = new Date();
+  const connection = await pool.getConnection();
+  let result;
+  try {
+    await connection.beginTransaction();
+    const [classes] = await connection.query('SELECT class_code FROM classes WHERE class_code = ? FOR UPDATE', [classCode]);
+    if (!classes.length) {
+      await connection.rollback();
+      return { error: 'Your assigned class could not be found.', status: 404 };
+    }
+    const [active] = await connection.query('SELECT id FROM sessions WHERE class_code = ? AND is_active = 1 LIMIT 1', [classCode]);
+    if (active.length) {
+      await connection.rollback();
+      return { error: 'A class session is already active. End it before starting another lesson.', status: 409 };
+    }
+    if (actingAssignment) {
+      const [assignments] = await connection.query(
+        `SELECT a.id FROM acting_rep_assignments a
+         JOIN users u ON u.id = a.acting_user_id JOIN users p ON p.id = a.appointed_by
+         WHERE a.id = ? AND a.class_code = ? AND a.acting_user_id = ?
+           AND a.session_id IS NULL AND a.revoked_at IS NULL AND a.expires_at > ?
+           AND u.role = 'student' AND u.status = 'active' AND u.class_code = a.class_code
+           AND p.role = 'student_rep' AND p.status = 'active' AND p.class_code = a.class_code
+         FOR UPDATE`,
+        [actingAssignment.id, classCode, actingAssignment.userId, sqlDate(new Date())]
+      );
+      if (!assignments.length) {
+        await connection.rollback();
+        return { error: 'Your Acting Rep appointment has expired, been revoked, or was already used for a session.', status: 403 };
+      }
+    }
+    const [insert] = await connection.query(
+      'INSERT INTO sessions (class_code, unit_name, lecturer_name, start_time, end_time, late_threshold_mins, is_active, venue) VALUES (?, ?, ?, ?, ?, ?, 1, ?)',
+      [classCode, unit_name.trim(), lecturer_name.trim(), sqlDate(startedAt), sqlDate(new Date(startedAt.getTime() + 3 * 3600 * 1000)), Number(late_threshold_mins) || 15, venue || null]
+    );
+    result = { id: insert.insertId, class_code: classCode, unit_name: unit_name.trim(), lecturer_name: lecturer_name.trim(), venue: venue || null };
+    if (actingAssignment) {
+      const [bound] = await connection.query(
+        `UPDATE acting_rep_assignments SET session_id = ?
+         WHERE id = ? AND class_code = ? AND acting_user_id = ?
+           AND session_id IS NULL AND revoked_at IS NULL AND expires_at > ?`,
+        [result.id, actingAssignment.id, classCode, actingAssignment.userId, sqlDate(new Date())]
+      );
+      if (!bound.affectedRows) {
+        await connection.rollback();
+        return { error: 'Your Acting Rep appointment is no longer active. The session was not started.', status: 403 };
+      }
+    }
+    await connection.commit();
+  } catch (err) {
+    await connection.rollback();
+    throw err;
+  } finally {
+    connection.release();
+  }
+  await recomputeClassAttendance(classCode);
+  return { session: result };
+}
 
 async function admOf(req) {
   if (req.user.adm_no) return req.user.adm_no;
@@ -211,14 +292,50 @@ async function postChat(req, res, announcement) {
 // STUDENT
 // =========================================================================================
 export const student = {
+  actingRep: wrap(async (req, res) => {
+    if (req.user.role !== 'student') return bad(res, 'Acting Rep tools are available to trainee accounts only.', 403);
+    const assignment = await activeActingRepForClass(req.user.id, req.user.class_code);
+    const session = assignment?.session_id
+      ? await one('SELECT id, unit_name, lecturer_name, venue, start_time FROM sessions WHERE id = ? AND class_code = ? AND is_active = 1', [assignment.session_id, req.user.class_code])
+      : null;
+    res.json({
+      assignment: assignment ? { id: assignment.id, expiresAt: `${fmtDate(assignment.expires_at)} ${fmtTime(assignment.expires_at)} EAT` } : null,
+      session: session ? { id: session.id, unit_name: session.unit_name, lecturer_name: session.lecturer_name, venue: session.venue || '', startedAt: fmtTime(session.start_time) } : null,
+    });
+  }),
+  actingRepSessionStart: wrap(async (req, res) => {
+    if (req.user.role !== 'student' || !(await activeActingRepForClass(req.user.id, req.user.class_code))) {
+      return bad(res, 'You do not have an active Acting Rep appointment.', 403);
+    }
+    const assignment = await activeActingRepForClass(req.user.id, req.user.class_code);
+    if (!assignment || assignment.session_id) return bad(res, 'Your Acting Rep appointment has expired or has already been used for its session.', 403);
+    const result = await startClassSession(req.user.class_code, req.body, { id: assignment.id, userId: req.user.id });
+    if (result.error) return bad(res, result.error, result.status);
+    res.status(201).json(result.session);
+  }),
+  actingRepSessionEnd: wrap(async (req, res) => {
+    if (req.user.role !== 'student' || !(await activeActingRepForClass(req.user.id, req.user.class_code))) {
+      return bad(res, 'You do not have an active Acting Rep appointment.', 403);
+    }
+    const assignment = await activeActingRepForClass(req.user.id, req.user.class_code);
+    if (!assignment?.session_id) return bad(res, 'Your appointment is not currently covering an active session.', 403);
+    const session = await one('SELECT id FROM sessions WHERE id = ? AND class_code = ? AND is_active = 1', [assignment.session_id, req.user.class_code]);
+    if (!session) return bad(res, 'There is no active session to end.', 409);
+    const endedAt = new Date();
+    const endedAtSql = sqlDate(endedAt);
+    const result = await exec('UPDATE sessions SET is_active = 0, end_time = ?, ended_at = ? WHERE id = ? AND class_code = ? AND is_active = 1', [endedAtSql, endedAtSql, session.id, req.user.class_code]);
+    if (!result.affectedRows) return bad(res, 'This session has already ended.', 409);
+    res.json({ message: 'Session ended.', endedAt: fmtTime(endedAt) });
+  }),
   timetable: wrap(async (req, res) => {
     const v = await one("SELECT * FROM timetable_versions WHERE class_code = ? AND status = 'approved' ORDER BY id DESC LIMIT 1", [req.user.class_code]);
-    if (!v) return res.json({ version: null, slots: [] });
+    if (!v) return res.json({ version: null, slots: [], liveSession: await activeSessionForClass(req.user.class_code) });
     const slots = await q('SELECT * FROM timetable_slots WHERE version_id = ?', [v.id]);
     slots.sort((a, b) => DAY_ORDER.indexOf(a.day_of_week.toLowerCase()) - DAY_ORDER.indexOf(b.day_of_week.toLowerCase()) || String(a.start_time).localeCompare(String(b.start_time)));
     res.json({
       version: { id: v.id, term: v.term, status: v.status, comment: v.hod_comment, uploaded: fmtDate(v.created_at), file: fileInfo(v) },
       slots: slots.map((s) => ({ id: s.id, day: s.day_of_week, time: `${String(s.start_time).slice(0, 5)} - ${String(s.end_time).slice(0, 5)}`, unit: s.unit_name, venue: s.venue, lecturer: s.lecturer_name })),
+      liveSession: await activeSessionForClass(req.user.class_code),
     });
   }),
   dashboard: wrap(async (req, res) => {
@@ -303,17 +420,86 @@ export const rep = {
   lecturers: wrap(async (req, res) => res.json(await q("SELECT id, name FROM users WHERE role = 'teacher' AND status = 'active' ORDER BY name"))),
 
   sessionStart: wrap(async (req, res) => {
+    const result = await startClassSession(classOf(req), req.body);
+    if (result.error) return bad(res, result.error, result.status);
+    res.status(201).json(result.session);
+  }),
+  actingRep: wrap(async (req, res) => {
+    if (req.user.role !== 'student_rep') return bad(res, 'Only the Class Rep can manage Acting Rep appointments.', 403);
     const cc = classOf(req);
-    const { unit_name, lecturer_name, venue, late_threshold_mins } = req.body;
+    const [members, assignment] = await Promise.all([
+      q(`SELECT u.id, u.name, s.adm_no FROM users u JOIN students s ON s.user_id = u.id
+         WHERE u.class_code = ? AND u.role = 'student' AND u.status = 'active' ORDER BY u.name`, [cc]),
+      one(`      SELECT a.id, a.acting_user_id, a.session_id, u.name AS acting_name, a.expires_at
+         FROM acting_rep_assignments a JOIN users u ON u.id = a.acting_user_id JOIN users p ON p.id = a.appointed_by
+         WHERE a.class_code = ? AND a.revoked_at IS NULL AND a.expires_at > ?
+           AND u.role = 'student' AND u.status = 'active' AND u.class_code = a.class_code
+           AND p.role = 'student_rep' AND p.status = 'active' AND p.class_code = a.class_code
+           AND (a.session_id IS NULL OR EXISTS (SELECT 1 FROM sessions s WHERE s.id = a.session_id AND s.is_active = 1))
+         ORDER BY a.id DESC LIMIT 1`, [cc, sqlDate(new Date())]),
+    ]);
+    res.json({
+      members,
+      assignment: assignment ? {
+        id: assignment.id, userId: assignment.acting_user_id, name: assignment.acting_name,
+        expiresAt: `${fmtDate(assignment.expires_at)} ${fmtTime(assignment.expires_at)} EAT`,
+      } : null,
+    });
+  }),
+  actingRepAssign: wrap(async (req, res) => {
+    if (req.user.role !== 'student_rep') return bad(res, 'Only the Class Rep can appoint an Acting Rep.', 403);
+    const cc = classOf(req);
+    const userId = Number(req.body.user_id);
     if (!cc) return bad(res, 'Your account has no class assigned.');
-    if (!String(unit_name || '').trim() || !String(lecturer_name || '').trim()) return bad(res, 'Unit and lecturer are required.');
-    const startedAt = new Date();
-    await exec('UPDATE sessions SET is_active = 0, ended_at = COALESCE(ended_at, ?) WHERE class_code = ? AND is_active = 1', [sqlDate(startedAt), cc]);
-    const r = await exec(
-      'INSERT INTO sessions (class_code, unit_name, lecturer_name, start_time, end_time, late_threshold_mins, is_active, venue) VALUES (?, ?, ?, ?, ?, ?, 1, ?)',
-      [cc, unit_name.trim(), lecturer_name.trim(), sqlDate(startedAt), sqlDate(new Date(startedAt.getTime() + 3 * 3600 * 1000)), Number(late_threshold_mins) || 15, venue || null]);
-    await recomputeClassAttendance(cc); // a new session lowers the % of everyone who hasn't attended yet
-    res.status(201).json({ id: r.insertId, class_code: cc, unit_name: unit_name.trim(), lecturer_name: lecturer_name.trim(), venue: venue || null });
+    if (!Number.isSafeInteger(userId) || userId <= 0) return bad(res, 'Select a valid active trainee from your class.');
+    const member = await one("SELECT id, name FROM users WHERE id = ? AND class_code = ? AND role = 'student' AND status = 'active'", [userId, cc]);
+    if (!member) return bad(res, 'That trainee is not an active member of your class.', 404);
+    const connection = await pool.getConnection();
+    let assignment;
+    try {
+      await connection.beginTransaction();
+      const [classes] = await connection.query('SELECT class_code FROM classes WHERE class_code = ? FOR UPDATE', [cc]);
+      if (!classes.length) {
+        await connection.rollback();
+        return bad(res, 'Class not found.', 404);
+      }
+      const [existing] = await connection.query(
+        "SELECT id FROM acting_rep_assignments WHERE class_code = ? AND revoked_at IS NULL AND expires_at > ? LIMIT 1",
+        [cc, sqlDate(new Date())]
+      );
+      if (existing.length) {
+        await connection.rollback();
+        return bad(res, 'An Acting Rep is already appointed. Revoke that appointment before choosing another.', 409);
+      }
+      const [activeSessions] = await connection.query('SELECT id FROM sessions WHERE class_code = ? AND is_active = 1 LIMIT 1', [cc]);
+      if (activeSessions.length) {
+        await connection.rollback();
+        return bad(res, 'End the current class session before appointing an Acting Rep for the next session.', 409);
+      }
+      const now = new Date();
+      const expiresAt = new Date(now.getTime() + ACTING_REP_HOURS * 3600 * 1000);
+      const [insert] = await connection.query(
+        'INSERT INTO acting_rep_assignments (class_code, appointed_by, acting_user_id, created_at, expires_at) VALUES (?, ?, ?, ?, ?)',
+        [cc, req.user.id, userId, sqlDate(now), sqlDate(expiresAt)]
+      );
+      assignment = { id: insert.insertId, userId, name: member.name, expiresAt: `${fmtDate(expiresAt)} ${fmtTime(expiresAt)} EAT` };
+      await connection.commit();
+    } catch (err) {
+      await connection.rollback();
+      throw err;
+    } finally {
+      connection.release();
+    }
+    res.status(201).json({ assignment, message: `${member.name} is appointed Acting Rep for ${ACTING_REP_HOURS} hours.` });
+  }),
+  actingRepRevoke: wrap(async (req, res) => {
+    if (req.user.role !== 'student_rep') return bad(res, 'Only the Class Rep can revoke an Acting Rep appointment.', 403);
+    const result = await exec(
+      'UPDATE acting_rep_assignments SET revoked_at = ? WHERE id = ? AND class_code = ? AND revoked_at IS NULL AND expires_at > ?',
+      [sqlDate(new Date()), Number(req.params.id), classOf(req), sqlDate(new Date())]
+    );
+    if (!result.affectedRows) return bad(res, 'This Acting Rep appointment is no longer active.', 404);
+    res.json({ message: 'Acting Rep appointment revoked. Their temporary access has ended.' });
   }),
   sessionCurrent: wrap(async (req, res) => {
     const s = await one('SELECT * FROM sessions WHERE class_code = ? AND is_active = 1 ORDER BY id DESC LIMIT 1', [classOf(req)]);
@@ -434,7 +620,13 @@ export const rep = {
     req.app.get('io')?.to(cc).emit('attendance_update', { class_code: cc, adm_no: student.adm_no, name: student.name, is_late: isLate });
     res.status(201).json({ message: `${student.name} marked present${isLate ? ' (late)' : ''}.`, is_late: isLate, points_earned: points, logId: log.insertId });
   }),
-  sessionEnd: wrap(async (req, res) => { await exec('UPDATE sessions SET is_active = 0, ended_at = ? WHERE class_code = ? AND is_active = 1', [sqlDate(), classOf(req)]); res.json({ message: 'Session ended.' }); }),
+  sessionEnd: wrap(async (req, res) => {
+    const endedAt = new Date();
+    const endedAtSql = sqlDate(endedAt);
+    const result = await exec('UPDATE sessions SET is_active = 0, end_time = ?, ended_at = ? WHERE class_code = ? AND is_active = 1', [endedAtSql, endedAtSql, classOf(req)]);
+    if (!result.affectedRows) return bad(res, 'There is no active session to end.', 409);
+    res.json({ message: 'Session ended.', endedAt: fmtTime(endedAt) });
+  }),
 
   dashboard: wrap(async (req, res) => {
     const cc = classOf(req);
@@ -538,12 +730,13 @@ export const rep = {
 
   timetable: wrap(async (req, res) => {
     const v = await one('SELECT * FROM timetable_versions WHERE class_code = ? ORDER BY id DESC LIMIT 1', [classOf(req)]);
-    if (!v) return res.json({ version: null, slots: [] });
+    if (!v) return res.json({ version: null, slots: [], liveSession: await activeSessionForClass(classOf(req)) });
     const slots = await q('SELECT * FROM timetable_slots WHERE version_id = ?', [v.id]);
     slots.sort((a, b) => DAY_ORDER.indexOf(a.day_of_week.toLowerCase()) - DAY_ORDER.indexOf(b.day_of_week.toLowerCase()) || String(a.start_time).localeCompare(String(b.start_time)));
     res.json({
       version: { id: v.id, term: v.term, status: v.status, comment: v.hod_comment, uploaded: fmtDate(v.created_at), file: fileInfo(v) },
       slots: slots.map((s) => ({ id: s.id, day: s.day_of_week, time: `${String(s.start_time).slice(0, 5)} - ${String(s.end_time).slice(0, 5)}`, unit: s.unit_name, venue: s.venue, lecturer: s.lecturer_name })),
+      liveSession: await activeSessionForClass(classOf(req)),
     });
   }),
 
@@ -689,7 +882,7 @@ export const teacher = {
       const present = (await one('SELECT COUNT(*) AS n FROM attendance_logs WHERE session_id = ?', [s.id])).n;
       const total = (await classStudents(s.class_code)).length;
       const repRow = await one('SELECT u.name FROM classes c JOIN users u ON u.id = c.rep_id WHERE c.class_code = ?', [s.class_code]) || await one("SELECT name FROM users WHERE role = 'student_rep' AND class_code = ? AND status = 'active'", [s.class_code]);
-      out.push({ id: s.id, unit: s.unit_name, classCode: s.class_code, rep: repRow?.name || '—', date: fmtDate(s.start_time), time: fmtTime(s.start_time), present, total, signed: !!s.signed_at, active: !!s.is_active });
+      out.push({ id: s.id, unit: s.unit_name, classCode: s.class_code, rep: repRow?.name || '—', date: fmtDate(s.start_time), time: fmtTime(s.start_time), stopTime: s.ended_at ? fmtTime(s.ended_at) : null, present, total, signed: !!s.signed_at, active: !!s.is_active });
     }
     res.json(out);
   }),
@@ -704,11 +897,41 @@ export const teacher = {
     res.json({
       session: {
         id: session.id, unit: session.unit_name, classCode: session.class_code,
-        date: fmtDate(session.start_time), time: fmtTime(session.start_time), active: !!session.is_active,
+        date: fmtDate(session.start_time), time: fmtTime(session.start_time),
+        stopTime: session.ended_at ? fmtTime(session.ended_at) : null, active: !!session.is_active,
       },
       total: roster.length,
       present: roster.length - absent.length,
       absent,
+    });
+  }),
+  present: wrap(async (req, res) => {
+    const session = (await lecturerSessions(req)).find((item) => String(item.id) === String(req.params.id));
+    if (!session) return bad(res, 'Session not found (or it is not one of your lessons).', 404);
+    const roster = await classStudents(session.class_code);
+    const records = await q(
+      `SELECT adm_no, timestamp, is_late, record_method FROM attendance_logs WHERE session_id = ? ORDER BY timestamp, adm_no`,
+      [session.id]
+    );
+    const students = new Map(roster.map((student) => [student.adm_no, student]));
+    const present = records.map((record) => {
+      const student = students.get(record.adm_no);
+      return student ? {
+        adm: student.adm_no,
+        name: student.name,
+        time: fmtTime(record.timestamp),
+        late: !!record.is_late,
+        method: record.record_method || 'qr',
+      } : null;
+    }).filter(Boolean);
+    res.json({
+      session: {
+        id: session.id, unit: session.unit_name, classCode: session.class_code,
+        date: fmtDate(session.start_time), time: fmtTime(session.start_time), active: !!session.is_active,
+      },
+      total: roster.length,
+      present: present.length,
+      students: present,
     });
   }),
   sign: wrap(async (req, res) => {
@@ -871,16 +1094,19 @@ export const hod = {
 
   // Students/reps are bound to the first device they sign in on. This lists them (any class) and shows who has one registered.
   devices: wrap(async (req, res) => {
-    const search = String(req.query.search || '').trim().toLowerCase().slice(0, 60), cc = String(req.query.class_code || '').trim();
+    const search = String(req.query.search || '').trim().toLowerCase().slice(0, 60);
+    const cc = String(req.query.class_code || '').trim();
+    const department = String(req.query.department || '').trim();
     const where = ["u.status = 'active'"], params = [];
     if (cc) { where.push('u.class_code = ?'); params.push(cc); }
+    if (department) { where.push('c.department = ?'); params.push(department); }
     if (search) { where.push('(LOWER(u.name) LIKE ? OR LOWER(s.adm_no) LIKE ? OR LOWER(u.email) LIKE ?)'); const like = `%${search}%`; params.push(like, like, like); }
-    const rows = await q(`SELECT s.adm_no, u.name, u.email, u.class_code, u.role, d.id AS lock_id, d.updated_at AS since
-      FROM students s JOIN users u ON u.id = s.user_id LEFT JOIN device_locks d ON d.adm_no = s.adm_no
+    const rows = await q(`SELECT s.adm_no, u.name, u.email, u.class_code, u.role, c.department, d.id AS lock_id, d.updated_at AS since
+      FROM students s JOIN users u ON u.id = s.user_id LEFT JOIN classes c ON c.class_code = u.class_code LEFT JOIN device_locks d ON d.adm_no = s.adm_no
       WHERE ${where.join(' AND ')} ORDER BY u.name LIMIT 201`, params);
     res.json({
       truncated: rows.length > 200, // the fingerprint itself is never sent, only whether one is registered
-      students: rows.slice(0, 200).map((r) => ({ adm: r.adm_no, name: r.name, email: r.email, classCode: r.class_code, role: r.role, registered: !!r.lock_id, since: r.since ? `${fmtDate(r.since)} ${fmtTime(r.since)}` : null })),
+      students: rows.slice(0, 200).map((r) => ({ adm: r.adm_no, name: r.name, email: r.email, classCode: r.class_code, department: r.department || '', role: r.role, registered: !!r.lock_id, since: r.since ? `${fmtDate(r.since)} ${fmtTime(r.since)}` : null })),
     });
   }),
   resetDevice: wrap(async (req, res) => {
@@ -1250,12 +1476,13 @@ export const admin = {
     res.json({ message: `${u.name}'s staff account was permanently deleted.` });
   }),
   activity: wrap(async (req, res) => {
-    const rows = await q(`SELECT id, actor_name, actor_role, action_method, action_route, status_code, created_at
+    const rows = await q(`SELECT id, actor_name, actor_role, action_method, action_route, status_code, duration_ms, created_at
       FROM activity_logs ORDER BY id DESC LIMIT 300`);
     res.json(rows.map((row) => ({
       id: row.id, actor: row.actor_name, role: row.actor_role, method: row.action_method,
       route: row.action_route, status: Number(row.status_code),
-      time: `${fmtDate(row.created_at)} ${fmtTime(row.created_at)}`,
+      time: `${EAT_DATETIME.format(asDate(row.created_at))} EAT`,
+      durationMs: row.duration_ms == null ? null : Number(row.duration_ms),
     })));
   }),
   staffDecision: wrap(async (req, res) => {
@@ -1425,7 +1652,7 @@ async function buildWeeklySheet(cc, week) {
     classRegister,
     weekStart: isoDay(b.mon), weekEnd: isoDay(b.sun), weekLabel: `${dayLabel(b.mon)} - ${dayLabel(b.sun)} ${b.sun.getFullYear()}`,
     weekNumber, dateFrom: shortDate(b.mon), dateTo: shortDate(friday), year: b.mon.getFullYear(), weekendSkipped,
-    sessions: sessions.map((s, i) => ({ n: i + 1, id: s.id, label: `${dayLabel(asDate(s.start_time))} ${fmtTime(s.start_time)}`, unit: s.unit_name, lecturer: s.lecturer_name, signed: !!s.signed_at })),
+    sessions: sessions.map((s, i) => ({ n: i + 1, id: s.id, label: `${dayLabel(asDate(s.start_time))} ${fmtTime(s.start_time)}`, stopTime: s.ended_at ? fmtTime(s.ended_at) : null, unit: s.unit_name, lecturer: s.lecturer_name, signed: !!s.signed_at })),
     students, subjects,
     totals: { students: students.length, sessions: sessions.length, presentStudents: students.filter((s) => s.present > 0).length, perfect: sessions.length ? students.filter((s) => s.absent === 0).length : 0 },
   };
@@ -1453,8 +1680,8 @@ function sendRegisterPdf(res, sh, filename) {
     const th = doc.heightOfString(text, { width: w - 3, align });
     doc.text(text, x + 1.5, y + Math.max(1, (h - th) / 2), { width: w - 3, height: h, align, ellipsis: true });
   };
-  const tick = (cx, cy, scale = 1) => doc.save().lineWidth(1.3 * scale).lineCap('round').lineJoin('round').strokeColor(BLACK).moveTo(cx - 4.5 * scale, cy + 0.5 * scale).lineTo(cx - 1.5 * scale, cy + 3.8 * scale).lineTo(cx + 5 * scale, cy - 3.8 * scale).stroke().restore();
-  const cross = (cx, cy, scale = 1) => doc.save().lineWidth(1.1 * scale).lineCap('round').strokeColor(BLACK).moveTo(cx - 3.5 * scale, cy - 3.5 * scale).lineTo(cx + 3.5 * scale, cy + 3.5 * scale).moveTo(cx + 3.5 * scale, cy - 3.5 * scale).lineTo(cx - 3.5 * scale, cy + 3.5 * scale).stroke().restore();
+  const tick = (cx, cy, scale = 1) => doc.save().lineWidth(1.3 * scale).lineCap('round').lineJoin('round').strokeColor('#059669').moveTo(cx - 4.5 * scale, cy + 0.5 * scale).lineTo(cx - 1.5 * scale, cy + 3.8 * scale).lineTo(cx + 5 * scale, cy - 3.8 * scale).stroke().restore();
+  const cross = (cx, cy, scale = 1) => doc.save().lineWidth(1.1 * scale).lineCap('round').strokeColor('#e11d48').moveTo(cx - 3.5 * scale, cy - 3.5 * scale).lineTo(cx + 3.5 * scale, cy + 3.5 * scale).moveTo(cx + 3.5 * scale, cy - 3.5 * scale).lineTo(cx - 3.5 * scale, cy + 3.5 * scale).stroke().restore();
   const field = (name, value, x, y, w) => { // "NAME: ______value______" like the printed form
     doc.font('Helvetica-Bold').fontSize(8.5).fillColor(BLACK);
     const lw = doc.widthOfString(name) + 4;
@@ -1532,9 +1759,12 @@ function sendRegisterPdf(res, sh, filename) {
 
   const reg = { unit: '', lecturer: '', cells: sh.classRegister.cells, rows: sh.classRegister.rows };
   const n = reg.rows.length;
-  const ROW = n ? Math.min(17, availRows / n) : 17;
-  const perPage = Math.max(1, n);
-  drawPage(reg, 0, 1, 1, ROW, perPage);
+  const perPage = 30;
+  const pageTotal = Math.max(1, Math.ceil(n / perPage));
+  const rowHeight = Math.min(17, availRows / Math.min(n || 1, perPage));
+  for (let page = 0; page < pageTotal; page++) {
+    drawPage(reg, page * perPage, page + 1, pageTotal, rowHeight, perPage);
+  }
   doc.end();
 }
 

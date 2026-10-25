@@ -13,6 +13,9 @@ const timetableFile = (req, res, next) => timetableUpload.single('file')(req, re
 // Mounted in server.js behind verifyToken + requireRole(...)
 export const studentRouter = express.Router();
 studentRouter.get('/dashboard', student.dashboard);
+studentRouter.get('/acting-rep', student.actingRep);
+studentRouter.post('/acting-rep/sessions', student.actingRepSessionStart);
+studentRouter.post('/acting-rep/sessions/end', student.actingRepSessionEnd);
 studentRouter.get('/timetable', student.timetable);
 studentRouter.get('/timetable/:id/file', sendTimetableFile);
 studentRouter.get('/history', student.history);
@@ -27,6 +30,9 @@ export const classrepRouter = express.Router();
 classrepRouter.get('/lecturers', rep.lecturers);
 classrepRouter.post('/sessions', rep.sessionStart);
 classrepRouter.get('/sessions/current', rep.sessionCurrent);
+classrepRouter.get('/acting-rep', rep.actingRep);
+classrepRouter.post('/acting-rep', rep.actingRepAssign);
+classrepRouter.post('/acting-rep/:id/revoke', rep.actingRepRevoke);
 classrepRouter.get('/manual-attendance-pin/status', rep.manualAttendancePinStatus);
 classrepRouter.post('/manual-attendance-pin/setup', rep.manualAttendancePinSetup);
 classrepRouter.post('/manual-attendance-pin/unlock', rep.manualAttendancePinUnlock);
@@ -59,6 +65,7 @@ export const teacherRouter = express.Router();
 teacherRouter.get('/dashboard', teacher.dashboard);
 teacherRouter.get('/sessions', teacher.sessions);
 teacherRouter.get('/sessions/:id/absent', teacher.absent);
+teacherRouter.get('/sessions/:id/present', teacher.present);
 teacherRouter.post('/sessions/:id/sign', teacher.sign);
 teacherRouter.get('/absenteeism', teacher.absenteeism);
 

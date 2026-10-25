@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { startRegistration } from '@simplewebauthn/browser';
 import { useNavigate } from 'react-router-dom';
 import api, { getErrorMessage } from '../services/api';
@@ -23,6 +23,9 @@ export default function Profile() {
   const [passkeysLoading, setPasskeysLoading] = useState(true);
   const [passkeyBusy, setPasskeyBusy] = useState(false);
   const [passkeyNotice, setPasskeyNotice] = useState(null);
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [photoNotice, setPhotoNotice] = useState(null);
+  const photoInputRef = useRef(null);
 
   useEffect(() => {
     let active = true;
@@ -67,6 +70,25 @@ export default function Profile() {
     } catch (err) {
       setNotice({ kind: 'error', text: getErrorMessage(err, 'Could not update your profile.') });
     } finally { setSaving(false); }
+  };
+
+  const uploadPhoto = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setPhotoBusy(true);
+    setPhotoNotice(null);
+    try {
+      const formData = new FormData();
+      formData.append('photo', file);
+      const { data } = await api.post('/profile/photo', formData);
+      setProfile((current) => ({ ...current, profile_photo_url: data.user.profile_photo_url }));
+      setPhotoNotice({ kind: 'ok', text: data.message });
+    } catch (err) {
+      setPhotoNotice({ kind: 'error', text: getErrorMessage(err, 'Could not update your profile photo.') });
+    } finally {
+      setPhotoBusy(false);
+      if (photoInputRef.current) photoInputRef.current.value = '';
+    }
   };
 
   const changePassword = async (event) => {
@@ -153,8 +175,27 @@ export default function Profile() {
       {loading ? <Spinner /> : profile && (
         <div className="space-y-4">
           <Card className="flex flex-wrap items-center gap-4 border-blue-100 bg-gradient-to-r from-blue-50/80 to-white p-5">
-            <div aria-hidden="true" className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-lg font-black text-white shadow-sm shadow-blue-900/20">
-              {initials}
+            <div className="relative">
+              {profile.profile_photo_url ? (
+                <img src={profile.profile_photo_url} alt="Profile" className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl object-cover shadow-sm shadow-blue-900/20" />
+              ) : (
+                <div aria-hidden="true" className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-lg font-black text-white shadow-sm shadow-blue-900/20">
+                  {initials}
+                </div>
+              )}
+              {isStudent && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => photoInputRef.current?.click()}
+                    disabled={photoBusy}
+                    className="absolute -bottom-1 -right-1 rounded-full border border-white bg-slate-900 px-2 py-1 text-[10px] font-bold text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {photoBusy ? '…' : 'Edit'}
+                  </button>
+                  <input ref={photoInputRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" className="hidden" onChange={uploadPhoto} />
+                </>
+              )}
             </div>
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
@@ -170,6 +211,7 @@ export default function Profile() {
               </div>
             )}
           </Card>
+          {photoNotice && <Notice kind={photoNotice.kind}>{photoNotice.text}</Notice>}
 
           <div className="grid items-start gap-4 lg:grid-cols-2">
             <Card className="p-5">

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useFetch } from '../../hooks/useFetch';
 import FileActions, { fmtSize } from '../../components/FileActions';
 import { Page, Async, Table, Badge, Card, Notice } from '../../components/ui';
+import LiveSessionCard from '../../components/LiveSessionCard';
 import { dayKey, formatDuration, minutesOf, slotTiming, WEEKDAYS } from '../../utils/timetable';
 
 function LiveSchedule({ slots, now, selectedDay, onSelectDay }) {
@@ -181,7 +182,7 @@ function WeekSchedule({ slots, today, selectedDay, onSelectDay }) {
 }
 
 export default function Timetable() {
-  const state = useFetch('/student/timetable', { pollMs: 60000 });
+  const state = useFetch('/student/timetable', { pollMs: 10000 });
   const [now, setNow] = useState(() => new Date());
   const [activeTab, setActiveTab] = useState('live');
   const [selectedDay, setSelectedDay] = useState(null);
@@ -209,8 +210,11 @@ export default function Timetable() {
   return (
     <Page title="Class timetable" subtitle="Your approved schedule, with a live view of today's lessons">
       <Async state={state}>
-        {(data) => !data.version ? <Notice kind="info">There is no approved timetable for your class yet.</Notice> : (
+        {(data) => (
           <>
+            <LiveSessionCard session={data.liveSession} />
+            {!data.version ? <Notice kind="info">There is no approved timetable for your class yet.</Notice> : (
+            <>
             <Card className="space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div className="flex flex-wrap items-center gap-2">
@@ -271,6 +275,8 @@ export default function Timetable() {
                       : 'This approved timetable has no lesson times or attached file yet.'}
                   </Notice>}
               </div>
+            )}
+            </>
             )}
           </>
         )}

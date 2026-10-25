@@ -24,6 +24,7 @@ const RegisterHod = page(() => import('./pages/Auth/RegisterHod'));
 const RegisterAdmin = page(() => import('./pages/Auth/RegisterAdmin'));
 // Student
 const StudentDashboard = page(() => import('./pages/student/Dashboard'));
+const ActingRep = page(() => import('./pages/student/ActingRep'));
 const StudentTimetable = page(() => import('./pages/student/Timetable'));
 const ScanAttendance = page(() => import('./pages/student/ScanAttendance'));
 const MyRank = page(() => import('./pages/student/MyRank'));
@@ -49,6 +50,7 @@ const ParentAlerts = page(() => import('./pages/classrep/ParentAlerts'));
 // Teacher
 const TeacherDashboard = page(() => import('./pages/teacher/Dashboard'));
 const SignAttendance = page(() => import('./pages/teacher/SignAttendance'));
+const TeacherPresent = page(() => import('./pages/teacher/PresentTrainees'));
 const MySubjectsAbsenteeism = page(() => import('./pages/teacher/MySubjectsAbsenteeism'));
 const SessionAbsentees = page(() => import('./pages/teacher/SessionAbsentees'));
 // HOD
@@ -137,6 +139,7 @@ export default function App() {
                 <Route element={<ProtectedRoute roles={ACCESS.student} />}>
                   <Route path="/scan" element={<ScanAttendance />} />
                   <Route path="/student/dashboard" element={<StudentDashboard />} />
+                  <Route path="/student/acting-rep" element={<ActingRep />} />
                   <Route path="/student/timetable" element={<StudentTimetable />} />
                   <Route path="/student/rank" element={<MyRank />} />
                   <Route path="/student/history" element={<MyHistory />} />
@@ -165,6 +168,7 @@ export default function App() {
                 <Route element={<ProtectedRoute roles={ACCESS.teacher} />}>
                   <Route path="/teacher/dashboard" element={<TeacherDashboard />} />
                   <Route path="/teacher/sign-attendance" element={<SignAttendance />} />
+                  <Route path="/teacher/present" element={<TeacherPresent />} />
                   <Route path="/teacher/absent" element={<SessionAbsentees />} />
                   <Route path="/teacher/absenteeism" element={<MySubjectsAbsenteeism />} />
                 </Route>

@@ -12,7 +12,87 @@ import instituteLogo from '../../assets/mtti-logo.png';
 
 const ROTATE_SECONDS = 25; // server tokens live 30 s; rotating early leaves time for a slow scan + verify
 
-function QrPanel({ session, onEnd }) {
+function ActingRepManager() {
+  const state = useFetch('/classrep/acting-rep');
+  const [userId, setUserId] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [message, setMessage] = useState('');
+
+  const appoint = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    setMessage('');
+    try {
+      const { data } = await api.post('/classrep/acting-rep', { user_id: Number(userId) });
+      setMessage(data.message);
+      setUserId('');
+      await state.reload(true);
+    } catch (err) {
+      setError(getErrorMessage(err, 'Could not appoint an Acting Rep.'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const revoke = async () => {
+    const assignment = state.data?.assignment;
+    if (!assignment || !window.confirm(`Revoke Acting Rep access for ${assignment.name}?`)) return;
+    setBusy(true);
+    setError('');
+    setMessage('');
+    try {
+      const { data } = await api.post(`/classrep/acting-rep/${assignment.id}/revoke`);
+      setMessage(data.message);
+      await state.reload(true);
+    } catch (err) {
+      setError(getErrorMessage(err, 'Could not revoke the Acting Rep appointment.'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card className="mb-5 border-indigo-100 shadow-sm">
+      <div className="flex items-start gap-3">
+        <span aria-hidden="true" className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-indigo-50 text-indigo-700">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5"><path strokeLinecap="round" strokeLinejoin="round" d="M16 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2m16 0v-2a4 4 0 0 0-3-3.87M14 3.13a4 4 0 0 1 0 7.75M14 7a4 4 0 1 1-8 0 4 4 0 0 1 8 0Z" /></svg>
+        </span>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-sm font-extrabold text-slate-900">Appoint an Acting Rep</h2>
+          <p className="mt-1 text-xs leading-5 text-slate-600">Choose an active trainee in your class. Their temporary access expires after 6 hours and can be revoked sooner.</p>
+          {error && <div className="mt-3"><Notice kind="error">{error}</Notice></div>}
+          {message && <div className="mt-3"><Notice kind="ok">{message}</Notice></div>}
+          <Async state={state}>
+            {(data) => data.assignment ? (
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-indigo-100 bg-indigo-50/60 p-3">
+                <div>
+                  <p className="text-sm font-bold text-indigo-900">{data.assignment.name}</p>
+                  <p className="mt-0.5 text-xs text-indigo-800">Access expires {data.assignment.expiresAt}.</p>
+                </div>
+                <Btn type="button" variant="danger" disabled={busy} onClick={revoke}>{busy ? 'Updating…' : 'Revoke access'}</Btn>
+              </div>
+            ) : (
+              <form onSubmit={appoint} className="mt-3 flex flex-col gap-2 sm:flex-row sm:items-end">
+                <label className="block flex-1 text-xs font-bold text-slate-700">
+                  Trainee in your class
+                  <select required value={userId} onChange={(event) => setUserId(event.target.value)} className="mt-1 block min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-sm font-medium text-slate-800 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-200">
+                    <option value="">Choose a trainee…</option>
+                    {data.members.map((member) => <option key={member.id} value={member.id}>{member.name} · {member.adm_no}</option>)}
+                  </select>
+                </label>
+                <Btn type="submit" disabled={busy || !userId}>{busy ? 'Appointing…' : 'Appoint for 6 hours'}</Btn>
+              </form>
+            )}
+          </Async>
+        </div>
+      </div>
+    </Card>
+  );
+}
+
+function QrPanel({ session, onEnd, sessionError, ending }) {
   const { user, deviceId } = useAuth();
   const [token, setToken] = useState('');
   const [repCode, setRepCode] = useState('');
@@ -104,7 +184,7 @@ function QrPanel({ session, onEnd }) {
               {session.venue && <p className="mt-1 text-xs text-slate-500">{session.venue}</p>}
             </div>
             {session.startedAt && (
-              <p className="text-xs text-slate-500">Started <span className="font-semibold text-slate-700">{session.startedAt} EAT</span></p>
+            <p className="text-xs text-slate-500">Time in <span className="font-semibold text-slate-700">{session.startedAt} EAT</span></p>
             )}
           </div>
         </header>
@@ -142,6 +222,7 @@ function QrPanel({ session, onEnd }) {
                 <span>Code refreshes automatically</span>
                 <span>{timeLeft}s remaining</span>
               </div>
+              <p className="mb-2 text-[10px] text-slate-500">Trainees must scan within 20 metres of this QR location.</p>
               <div
                 role="progressbar"
                 aria-label="Time remaining before the QR code refreshes"
@@ -231,7 +312,8 @@ function QrPanel({ session, onEnd }) {
         <section className="rounded-2xl border border-slate-200 bg-white p-5">
           <h3 className="text-sm font-bold text-slate-900">When the class is ready</h3>
           <p className="mt-1 text-xs leading-5 text-slate-500">End the session after trainees have checked in. This stops QR generation and attendance collection.</p>
-          <Btn variant="danger" onClick={onEnd} className="mt-4 w-full min-h-11">End session</Btn>
+          {sessionError && <div className="mt-3"><Notice kind="error">{sessionError}</Notice></div>}
+          <Btn variant="danger" onClick={onEnd} disabled={ending} className="mt-4 w-full min-h-11">{ending ? 'Recording time out…' : 'End session'}</Btn>
         </section>
       </aside>
     </div>
@@ -243,22 +325,38 @@ export default function GenerateQR() {
   const lecturers = useFetch('/classrep/lecturers');
   const [form, setForm] = useState({ unit_name: '', lecturer_name: '', venue: '', late_threshold_mins: 15 });
   const [busy, setBusy] = useState(false);
+  const [ending, setEnding] = useState(false);
   const [error, setError] = useState('');
+  const [endedMessage, setEndedMessage] = useState('');
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
   const start = async (e) => {
     e.preventDefault();
     setBusy(true); setError('');
+    setEndedMessage('');
     try { await api.post('/classrep/sessions', form); await current.reload(); }
     catch (err) { setError(getErrorMessage(err)); }
-    setBusy(false);
+    finally { setBusy(false); }
   };
-  const end = async () => { await api.post('/classrep/sessions/end'); current.setData({ session: null }); };
+  const end = async () => {
+    setError('');
+    setEnding(true);
+    try {
+      const { data } = await api.post('/classrep/sessions/end');
+      setEndedMessage(`Time out recorded at ${data.endedAt} EAT.`);
+      current.setData({ session: null });
+    } catch (err) {
+      setError(getErrorMessage(err, 'Could not end this session. Please try again.'));
+    } finally {
+      setEnding(false);
+    }
+  };
 
   return (
     <Page title="Attendance QR" subtitle="Start a session for the lesson, then show the rotating code to your class">
+      <ActingRepManager />
       <Async state={current}>
-        {(d) => (d.session ? <QrPanel session={d.session} onEnd={end} /> : renderStartForm())}
+        {(d) => (d.session ? <QrPanel session={d.session} onEnd={end} ending={ending} sessionError={error} /> : renderStartForm())}
       </Async>
     </Page>
   );
@@ -268,12 +366,13 @@ export default function GenerateQR() {
     return (
       <Card className="max-w-md">
         <form onSubmit={start} className="space-y-3">
+          {endedMessage && <Notice kind="ok">{endedMessage}</Notice>}
+          {error && <Notice kind="error">{error}</Notice>}
           <Input label="Unit / subject" required value={form.unit_name} onChange={set('unit_name')} placeholder="e.g. Computer Networking" />
           <Input label="Lecturer" required list="lecturer-list" value={form.lecturer_name} onChange={set('lecturer_name')} placeholder="Pick or type the lecturer's name" />
           <datalist id="lecturer-list">{(lecturers.data || []).map((l) => <option key={l.id} value={l.name} />)}</datalist>
           <Input label="Venue" value={form.venue} onChange={set('venue')} placeholder="e.g. Lab 1" />
           <Input label="Late after (minutes)" type="number" min="1" max="120" value={form.late_threshold_mins} onChange={set('late_threshold_mins')} />
-          {error && <Notice kind="error">{error}</Notice>}
           <Btn type="submit" disabled={busy}>{busy ? 'Starting…' : 'Start session & show QR'}</Btn>
         </form>
       </Card>

@@ -21,6 +21,7 @@ const statements = [
   'ALTER TABLE users ADD COLUMN token_version INT NOT NULL DEFAULT 0', // bumped on every password change: older logins stop working
   'ALTER TABLE users ADD COLUMN manual_attendance_pin_hash VARCHAR(255) NULL',
   'ALTER TABLE users ADD COLUMN manual_attendance_pin_version INT NOT NULL DEFAULT 0',
+  'ALTER TABLE students ADD COLUMN profile_photo_url VARCHAR(255) NULL',
   'ALTER TABLE users ADD COLUMN department VARCHAR(100) NULL',
   'ALTER TABLE users ADD COLUMN teacher_unit VARCHAR(150) NULL',
   'ALTER TABLE timetable_versions ADD COLUMN file_name VARCHAR(255) NULL',
@@ -45,8 +46,23 @@ const statements = [
      action_method VARCHAR(10) NOT NULL,
      action_route VARCHAR(255) NOT NULL,
      status_code INT NOT NULL,
+     duration_ms INT NULL,
      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
    ) ENGINE=InnoDB`,
+  `CREATE TABLE IF NOT EXISTS acting_rep_assignments (
+     id INT AUTO_INCREMENT PRIMARY KEY,
+     class_code VARCHAR(50) NOT NULL,
+     session_id INT NULL,
+     appointed_by INT NOT NULL,
+     acting_user_id INT NOT NULL,
+     created_at DATETIME NOT NULL,
+     expires_at DATETIME NOT NULL,
+     revoked_at DATETIME NULL
+   ) ENGINE=InnoDB`,
+  'CREATE INDEX idx_acting_rep_user_expiry ON acting_rep_assignments (acting_user_id, expires_at)',
+  'CREATE INDEX idx_acting_rep_class_expiry ON acting_rep_assignments (class_code, expires_at)',
+  'CREATE INDEX idx_acting_rep_session ON acting_rep_assignments (session_id)',
+  'ALTER TABLE activity_logs ADD COLUMN duration_ms INT NULL',
   `CREATE TABLE IF NOT EXISTS passkey_credentials (
       credential_hash CHAR(64) PRIMARY KEY,
       credential_id VARCHAR(1024) NOT NULL,

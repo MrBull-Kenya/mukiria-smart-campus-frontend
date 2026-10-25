@@ -128,6 +128,16 @@ ok('profile requires authentication and returns only the signed-in student profi
   (await api('GET', '/profile', { token: s1 })).data?.user?.adm_no === '1001' &&
   (await api('GET', '/profile', { token: s1 })).data?.user?.email === '1001@mtti.ac.ke');
 const profileBefore = (await api('GET', '/profile', { token: s1 })).data.user;
+const photoForm = new FormData();
+photoForm.append('photo', new Blob([Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/aXcAAAAASUVORK5CYII=', 'base64')], { type: 'image/png' }), 'profile.png');
+const photoUpload = await api('POST', '/profile/photo', { token: s1, form: photoForm });
+ok('student profile photo upload returns a saved URL and persists it', photoUpload.status === 200 && photoUpload.data.user.profile_photo_url?.startsWith('/uploads/profile-photos/') && (await api('GET', '/profile', { token: s1 })).data.user.profile_photo_url === photoUpload.data.user.profile_photo_url);
+if (photoUpload.data?.user?.profile_photo_url) {
+  await fs.promises.unlink(path.join(process.cwd(), 'uploads', photoUpload.data.user.profile_photo_url.slice('/uploads/'.length))).catch(() => {});
+}
+const invalidPhotoForm = new FormData();
+invalidPhotoForm.append('photo', new Blob(['<svg/>'], { type: 'image/svg+xml' }), 'profile.svg');
+ok('profile photo upload rejects active SVG content types', (await api('POST', '/profile/photo', { token: s1, form: invalidPhotoForm })).status === 400);
 const profileUpdate = await api('PUT', '/profile', { token: s1, body: {
   name: 'Alice Profile Update', email: profileBefore.email, parent_email: 'parent.profile@example.com', parent_phone: '+254700111222',
 } });
@@ -169,9 +179,29 @@ ok('student cannot approve temp ids via legacy route', (await api('PATCH', '/tem
 ok('rep must give unit+lecturer', (await api('POST', '/classrep/sessions', { token: repT, body: {} })).status === 400);
 const lects = await api('GET', '/classrep/lecturers', { token: repT });
 ok('lecturer list', lects.data?.some(l => l.name === 'Mr Teacher'));
+const actingStudentId = (await pool.query("SELECT id FROM users WHERE email = '1002@mtti.ac.ke'"))[0][0]?.id;
+const actingAppointment = await api('POST', '/classrep/acting-rep', { token: repT, body: { user_id: actingStudentId } });
+const actingAssignmentId = actingAppointment.data?.assignment?.id;
+ok('class rep can appoint an active trainee as Acting Rep', actingAppointment.status === 201 && actingAppointment.data.assignment?.userId === actingStudentId);
+ok('appointed trainee can view the active appointment', (await api('GET', '/student/acting-rep', { token: s2 })).data?.assignment?.id === actingAssignmentId && !!actingAssignmentId);
+const actingSession = await api('POST', '/student/acting-rep/sessions', { token: s2, body: { unit_name: 'Acting cover', lecturer_name: 'Mr Teacher', venue: 'Lab 1' } });
+ok('appointed trainee can start a class session', actingSession.status === 201 && actingSession.data.id > 0);
+const actingQr = await api('POST', '/qr/generate', { token: s2, body: {
+  session_id: actingSession.data?.id, venue: 'Lab 1', gps_lat: -1.123, gps_lng: 37.123,
+} });
+ok('appointed trainee can generate a rotating attendance QR', actingQr.status === 200 && !!actingQr.data?.token);
+ok('Acting Rep cannot use Class Rep manual attendance tools', (await api('GET', '/classrep/manual-attendance', { token: s2 })).status === 403);
+ok('class rep can revoke an Acting Rep appointment', (await api('POST', `/classrep/acting-rep/${actingAssignmentId}/revoke`, { token: repT })).status === 200);
+ok('revocation invalidates issued Acting Rep QR codes', (await api('POST', '/qr/verify', { token: s2, body: { token: actingQr.data?.token } })).status === 403);
+ok('revoked Acting Rep cannot end the session', (await api('POST', '/student/acting-rep/sessions/end', { token: s2 })).status === 403);
+ok('Class Rep can end session after revocation', (await api('POST', '/classrep/sessions/end', { token: repT })).status === 200);
 const sess = await api('POST', '/classrep/sessions', { token: repT, body: { unit_name: 'Networking', lecturer_name: 'Mr Teacher', venue: 'Lab 1' } });
 ok('start session', sess.status === 201 && sess.data.id > 0);
 const sid = sess.data.id;
+const liveStudentTimetable = await api('GET', '/student/timetable', { token: s1 });
+const liveRepTimetable = await api('GET', '/classrep/timetable', { token: repT });
+ok('trainee and rep timetable APIs include their live session', liveStudentTimetable.data?.liveSession?.id === sid && liveRepTimetable.data?.liveSession?.id === sid);
+ok('class rep cannot appoint an Acting Rep while a session is already active', (await api('POST', '/classrep/acting-rep', { token: repT, body: { user_id: (await pool.query("SELECT id FROM users WHERE email = '1003@mtti.ac.ke'"))[0][0]?.id } })).status === 409);
 await pool.query("INSERT INTO users (email, password, name, role, class_code) VALUES ('otherteacher@mtti.ac.ke', ?, 'Ms Other Teacher', 'teacher', NULL)", [pw]);
 const otherTL = await login('otherteacher@mtti.ac.ke', 'Passw0rd!', 'other-teacher'); const otherTeach = otherTL.data.token;
 ok('manual attendance is restricted to class reps', (await api('GET', '/classrep/manual-attendance', { token: s1 })).status === 403 && (await api('POST', '/classrep/manual-attendance', { token: s1, body: { adm_no: '1003' } })).status === 403);
@@ -195,6 +225,9 @@ const manualMark = await api('POST', '/classrep/manual-attendance', { token: rep
 const manualRow = (await pool.query('SELECT id, session_id, adm_no, is_late, points_earned, record_method, recorded_by FROM attendance_logs WHERE session_id = ? AND adm_no = ?', [sid, '1003']))[0][0];
 ok('rep manually marks a present student and records actor/method/points', manualMark.status === 201 && manualRow?.record_method === 'manual' && Number(manualRow.recorded_by) === Number(repId) && Number(manualRow.points_earned) === manualMark.data.points_earned && !manualMark.data.is_late);
 ok('manually marked student appears as present in the live roster', (await api('GET', '/classrep/manual-attendance', { token: repT, manualPin })).data.students.find((student) => student.adm === '1003')?.present === true);
+const teacherPresent = await api('GET', `/teacher/sessions/${sid}/present`, { token: teach });
+ok('trainer Present view includes rep-marked trainees with method and attendance time', teacherPresent.status === 200 && teacherPresent.data.present === 1 && teacherPresent.data.students.some((student) => student.adm === '1003' && student.method === 'manual' && student.time));
+ok('Present view is limited to the assigned lecturer', (await api('GET', `/teacher/sessions/${sid}/present`, { token: otherTeach })).status === 404);
 ok('manual check-in cannot be duplicated or applied outside this class', (await api('POST', '/classrep/manual-attendance', { token: repT, manualPin, body: { adm_no: '1003' } })).status === 409 && (await api('POST', '/classrep/manual-attendance', { token: repT, manualPin, body: { adm_no: '2001' } })).status === 404);
 const absentAfterManual = await api('GET', `/teacher/sessions/${sid}/absent`, { token: teach });
 ok('session absent list excludes rep-marked attendees', absentAfterManual.status === 200 && absentAfterManual.data.present === 1 && !absentAfterManual.data.absent.some((student) => student.adm === '1003') && absentAfterManual.data.absent.some((student) => student.adm === '1001'));
@@ -218,7 +251,11 @@ const tok = tokRes.data.token;
 const noPasskeyOptions = await api('POST', '/attendance/passkey/options', { token: s2, body: {
   session_id: sid, qr_token: tok, gps_lat: -1.123, gps_lng: 37.123, device_id: 'dev-s2',
 } });
-ok('biometric attendance requires an enrolled passkey', noPasskeyOptions.status === 403 && /passkey/i.test(noPasskeyOptions.data?.error));
+ok('attendance check-in is available without an enrolled passkey', noPasskeyOptions.status === 200 && noPasskeyOptions.data?.passkeyAvailable === false);
+const tooFarOptions = await api('POST', '/attendance/passkey/options', { token: s2, body: {
+  session_id: sid, qr_token: tok, gps_lat: -1.123, gps_lng: 37.1232, device_id: 'dev-s2',
+} });
+ok('trainee check-in enforces the exact 20-metre representative distance', tooFarOptions.status === 403 && /within 20 m/i.test(tooFarOptions.data?.error));
 
 const attendanceUserIds = new Map([
   [s1, s1L.data.user.id], [s2, s2L.data.user.id], [s3, s3L.data.user.id],
@@ -315,6 +352,7 @@ const savedDistance = (await pool.query('SELECT rep_distance_m FROM attendance_l
 ok('representative distance is returned and persisted', sc1.data.rep_distance_m === 0 && Number(savedDistance.rep_distance_m) === 0);
 ok('duplicate scan blocked (409)', (await scan(s1, { adm_no: '1001', device_id: 'dev-s1' })).status === 409);
 ok('outside geofence blocked', (await scan(s2, { adm_no: '1002', device_id: 'dev-s2', gps_lat: 0.0, gps_lng: 37.0 })).status === 403);
+ok('trainee cannot check in at remote QR location outside campus', (await scan(s2, { adm_no: '1002', device_id: 'dev-s2', gps_lat: -1, gps_lng: 37 }, remoteQr.data.token)).status === 403);
 ok('wrong device blocked', (await scan(s2, { adm_no: '1002', device_id: 'stolen-phone' })).status === 403);
 ok('other student adm_no spoof blocked', (await scan(s2, { adm_no: '1001', device_id: 'dev-s2' })).status === 403);
 ok('other class cannot scan this session', (await scan(sd, { adm_no: '2001', device_id: 'dev-d' })).status === 403);
@@ -397,6 +435,7 @@ const csvR = await api('GET', '/classrep/ministry-export?format=csv', { token: r
 ok('csv export', csvR.status === 200 && /text\/csv/.test(csvR.res.headers.get('content-type')) && csvR.buf.toString().includes('Alice'));
 const pdfR = await api('GET', '/classrep/ministry-export?format=pdf', { token: repT, raw: true });
 ok('pdf export is a real PDF', pdfR.status === 200 && pdfR.buf.slice(0, 4).toString() === '%PDF', pdfR.buf.slice(0, 20).toString());
+ok('small Export tab PDF does not contain a duplicate page', (pdfR.buf.toString('latin1').match(/\/Type \/Page\b/g) || []).length === 1);
 ok('class-rep report PDF embeds both institutional logos and a professionally formatted table',
   pdfR.status === 200 && (pdfR.buf.toString('latin1').match(/\/Subtype \/Image/g) || []).length >= 2 &&
   pdfR.buf.toString('latin1').includes('595.28'));
@@ -575,7 +614,7 @@ ok('admin cannot delete their own account', (await api('DELETE', `/admin/staff/$
 ok('admin deletes staff account', (await api('DELETE', `/admin/staff/${temporaryStaffId}`, { token: adminTok })).status === 200 && !(await api('GET', '/admin/staff', { token: adminTok })).data.some((staff) => staff.id === temporaryStaffId));
 await new Promise((resolve) => setTimeout(resolve, 50));
 const activityLog = await api('GET', '/admin/activity', { token: adminTok });
-ok('administrator activity feed records the actor, staff actions and timestamp', activityLog.status === 200 && activityLog.data.some((entry) => entry.actor === 'First Admin' && entry.method === 'DELETE' && entry.route === '/api/admin/staff/:id' && entry.time));
+ok('administrator activity feed records the actor, staff actions, EAT timestamp and response time', activityLog.status === 200 && activityLog.data.some((entry) => entry.actor === 'First Admin' && entry.method === 'DELETE' && entry.route === '/api/admin/staff/:id' && entry.time.endsWith('EAT') && Number.isInteger(entry.durationMs)));
 ok('activity feed is administrator-only', (await api('GET', '/admin/activity', { token: hod })).status === 403);
 
 // classes
@@ -741,6 +780,7 @@ await pool.query('UPDATE sessions SET start_time = ? WHERE id = ?', [stamp(new D
 const qr2 = (await api('POST', '/qr/generate', { token: repT, body: { session_id: sess2.data.id, gps_lat: -1.123, gps_lng: 37.123 } })).data.token;
 const lateScan = await scan(s1, { adm_no: '1001', device_id: 'dev-s1', session_id: sess2.data.id }, qr2);
 ok('student scanning 5 min after start is marked late', lateScan.status === 201 && lateScan.data.is_late === true && lateScan.data.points_earned === 5, JSON.stringify(lateScan.data));
+await api('POST', '/classrep/sessions/end', { token: repT });
 
 const wk = await api('GET', '/classrep/weekly-sheet', { token: repT });
 const colOf = (unit) => wk.data.sessions.findIndex((s) => s.unit === unit);
@@ -781,20 +821,24 @@ ok('administrator can fetch a class through the rep route with class_code', (awa
 // awkward inputs
 const slashPdf = await api('GET', `/hod/weekly-sheet?class_code=${encodeURIComponent('ITECH9/S/26')}&format=pdf`, { token: hod, raw: true });
 ok('class code with slashes + a class with no lessons still prints', slashPdf.status === 200 && slashPdf.buf.slice(0, 4).toString() === '%PDF' && hdr(slashPdf, 'content-disposition').includes('ITECH9_S_26'));
-for (let i = 1; i <= 22; i++) await api('POST', '/classrep/sessions', { token: otherRep, body: { unit_name: `Bulk ${i}`, lecturer_name: 'Mr Teacher' } });
+for (let i = 1; i <= 22; i++) {
+  const created = await api('POST', '/classrep/sessions', { token: otherRep, body: { unit_name: `Bulk ${i}`, lecturer_name: 'Mr Teacher' } });
+  ok(`bulk lesson ${i} starts without overlapping an active session`, created.status === 201);
+  await api('POST', '/classrep/sessions/end', { token: otherRep });
+}
 const manyPdf = await api('GET', '/classrep/weekly-sheet?format=pdf', { token: otherRep, raw: true });
 if (process.env.SAVE_SAMPLES) fsx.writeFileSync(process.env.SAVE_SAMPLES + '/many.pdf', manyPdf.buf);
 const manyJson = await api('GET', '/classrep/weekly-sheet', { token: otherRep });
 ok('a week with 22 lessons (more than fit on the page) still produces a PDF; JSON/CSV keep all of them', manyPdf.status === 200 && manyPdf.buf.slice(0, 4).toString() === '%PDF' && manyJson.data.sessions.length === 22 && (await api('GET', '/classrep/weekly-sheet?format=csv', { token: otherRep, raw: true })).buf.toString().split('\n')[0].includes('Bulk 22'));
 
-// even a long class is kept on one register page
+// The register continues on page two after the first 30 students.
 for (let i = 1; i <= 40; i++) await reg(String(7000 + i), `Student ${String(i).padStart(2, '0')}`, 'ITECH9/S/26');
 const longPdf = await api('GET', `/hod/weekly-sheet?class_code=${encodeURIComponent('ITECH9/S/26')}&format=pdf`, { token: hod, raw: true });
 const pageCount = (longPdf.buf.toString('latin1').match(/\/Type \/Page\b/g) || []).length;
-ok('a 41-student class prints on exactly one page', longPdf.status === 200 && pageCount === 1, `pages=${pageCount}`);
+ok('a 41-student register continues onto exactly one second page', longPdf.status === 200 && pageCount === 2, `pages=${pageCount}`);
 if (process.env.SAVE_SAMPLES) fsx.writeFileSync(process.env.SAVE_SAMPLES + '/long.pdf', longPdf.buf);
 const longSheet = (await api('GET', `/hod/weekly-sheet?class_code=${encodeURIComponent('ITECH9/S/26')}`, { token: hod })).data;
-ok('all 41 students are in the JSON and single-page register rows', longSheet.students.length === 41 && longSheet.classRegister.rows.length === 41);
+ok('all 41 students remain in JSON and the two-page register', longSheet.students.length === 41 && longSheet.classRegister.rows.length === 41);
 
 
 // ---------- 12c. the official register (form MTTI/REG/CUR/01): slots, ticks/crosses, header fields ----------
@@ -854,14 +898,12 @@ ok('class edit validation', (await api('PUT', '/admin/classes', { token: adminTo
 ok('a new class can be created with a department', (await addCls({ class_code: 'DEP1', course: 'Power', module: 'M1', department: 'Engineering' })).status === 201 && (await api('GET', '/admin/classes', { token: adminTok })).data.find((c) => c.code === 'DEP1').department === 'Engineering');
 await api('DELETE', '/admin/classes?code=DEP1', { token: adminTok });
 
-// time out is recorded when a session is ended, replaced, or signed
+// A second active lesson is rejected until the first is explicitly ended.
 const autoClosed = await api('POST', '/classrep/sessions', { token: repT, body: { unit_name: 'Auto close check', lecturer_name: 'Mr Teacher' } });
-const autoReplacement = await api('POST', '/classrep/sessions', { token: repT, body: { unit_name: 'Replacement check', lecturer_name: 'Mr Teacher' } });
-const replacedRow = (await pool.query('SELECT ended_at, is_active FROM sessions WHERE id = ?', [autoClosed.data.id]))[0][0];
-ok('starting a replacement session records the previous session stop time', replacedRow.ended_at && replacedRow.is_active === 0);
-const live = autoReplacement;
+const overlapAttempt = await api('POST', '/classrep/sessions', { token: repT, body: { unit_name: 'Replacement check', lecturer_name: 'Mr Teacher' } });
+ok('a second session cannot overlap an active lesson', autoClosed.status === 201 && overlapAttempt.status === 409);
 await api('POST', '/classrep/sessions/end', { token: repT });
-const endedRow = (await pool.query('SELECT ended_at, is_active FROM sessions WHERE id = ?', [live.data.id]))[0][0];
+const endedRow = (await pool.query('SELECT ended_at, is_active FROM sessions WHERE id = ?', [autoClosed.data.id]))[0][0];
 ok('ending a session records the time out', endedRow.ended_at && endedRow.is_active === 0, JSON.stringify(endedRow));
 const live2 = await api('POST', '/classrep/sessions', { token: repT, body: { unit_name: 'Sign check', lecturer_name: 'Mr Teacher' } });
 await api('POST', `/teacher/sessions/${live2.data.id}/sign`, { token: teach });
@@ -924,6 +966,8 @@ await snap();
   ok('HOD finds the locked-out student by name', byName.status === 200 && byName.data.students.length === 1 && me8001.adm === '8001' && me8001.classCode === 'ITECH6' && me8001.registered === true && /\d{4}/.test(me8001.since || ''), JSON.stringify(byName.data));
   ok('...also by admission number, by email, case-insensitively', (await find('?search=8001')).data.students[0]?.name === 'Lock Test' && (await find('?search=8001%40MTTI')).data.students[0]?.adm === '8001' && (await find('?search=LOCK')).data.students.some((s) => s.adm === '8001'));
   ok('class filter narrows the list; unknown search is empty', (await find('?class_code=ITECH6')).data.students.every((s) => s.classCode === 'ITECH6') && !(await find('?class_code=ITECH7')).data.students.some((s) => s.adm === '8001') && (await find('?search=zzzznope')).data.students.length === 0);
+  const byDepartment = await find('?department=Computing%20%26%20Informatics');
+  ok('department filter limits results to classes in that department', byDepartment.status === 200 && byDepartment.data.students.some((s) => s.adm === '8001') && byDepartment.data.students.every((s) => s.department === 'Computing & Informatics'));
   ok('the device fingerprint itself is never sent to the browser', !JSON.stringify(byName.data).includes('phone-A'));
   const all = await find('');
   ok('the full list shows registered and not-yet-registered students', all.data.students.some((s) => s.registered) && all.data.students.some((s) => !s.registered) && all.data.truncated === false);

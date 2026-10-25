@@ -16,7 +16,7 @@ function OfflineStatusBar() {
   let text = `Back online: ${pendingCount} queued item(s) waiting to sync`;
   if (!isOnline) {
     cls = 'bg-rose-600';
-    text = `You are offline. Biometric attendance check-in requires an internet connection.${pendingCount ? ` ${pendingCount} queued item(s) are waiting to sync.` : ''}`;
+    text = `You are offline. QR attendance check-in requires an internet connection.${pendingCount ? ` ${pendingCount} queued item(s) are waiting to sync.` : ''}`;
   } else if (syncing) {
     text = 'Syncing queued items with the server…';
   } else if (pendingCount === 0) {
@@ -27,16 +27,33 @@ function OfflineStatusBar() {
   return <div role={isOnline ? 'status' : 'alert'} className={`${cls} px-4 py-2.5 text-center text-xs font-semibold text-white`}>{text}</div>;
 }
 
+function initialTheme() {
+  try {
+    const saved = window.localStorage.getItem('mtti-theme');
+    if (saved === 'dark' || saved === 'light') return saved;
+  } catch {
+    // Use the system preference when local storage is unavailable.
+  }
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
 export default function AppLayout() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [theme, setTheme] = useState(initialTheme);
   const links = NAV_BY_ROLE[user.role] || [];
 
   useEffect(() => {
     setMobileNavOpen(false);
   }, [location.pathname]);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', theme === 'dark');
+    document.documentElement.style.colorScheme = theme;
+    try { window.localStorage.setItem('mtti-theme', theme); } catch { /* Theme still works for this page view. */ }
+  }, [theme]);
 
   const handleLogout = () => {
     logout();
@@ -61,6 +78,13 @@ export default function AppLayout() {
           <div className="flex shrink-0 items-center gap-1.5 sm:gap-2">
             <InstallButton />
             <NotificationBell />
+            <button type="button" onClick={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')}
+              aria-label={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`} title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+              className="flex h-10 w-10 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-700 shadow-sm transition hover:border-blue-300 hover:bg-blue-50 hover:text-blue-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600">
+              {theme === 'dark'
+                ? <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5"><circle cx="12" cy="12" r="4" /><path strokeLinecap="round" d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42" /></svg>
+                : <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5"><path strokeLinecap="round" strokeLinejoin="round" d="M20.5 15.5A8.5 8.5 0 0 1 8.5 3.5 8.5 8.5 0 1 0 20.5 15.5z" /></svg>}
+            </button>
             <NavLink to="/profile" aria-label="Open your profile" title="Profile" className="flex h-9 w-9 items-center justify-center rounded-full border border-blue-200 bg-blue-50 text-sm font-black text-blue-700 hover:bg-blue-100">
               {user.name?.trim()?.charAt(0)?.toUpperCase() || '👤'}
             </NavLink>

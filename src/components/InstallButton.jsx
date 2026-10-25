@@ -36,24 +36,39 @@ export default function InstallButton() {
 
   const click = async () => {
     if (!deferred) return setHelp((h) => !h);
-    deferred.prompt();
-    const choice = await deferred.userChoice;
-    setDeferred(null);
-    if (choice?.outcome === 'accepted') setInstalled(true);
+    try {
+      await deferred.prompt();
+      const choice = await deferred.userChoice;
+      setDeferred(null);
+      if (choice?.outcome === 'accepted') setInstalled(true);
+    } catch {
+      setHelp(true);
+      setDeferred(null);
+    }
   };
 
   const steps = installHelp({ secure: typeof window === 'undefined' || window.isSecureContext !== false, ios: typeof navigator !== 'undefined' && /iphone|ipad|ipod/i.test(navigator.userAgent || '') });
   return (
     <div className="relative" ref={box}>
-      <button type="button" onClick={click} aria-label="Install the app" aria-expanded={help}
-        className="group inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-bold text-slate-700 shadow-sm transition hover:border-blue-300 hover:bg-blue-50 hover:text-blue-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600">
-        <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-blue-50 text-blue-800 transition-colors group-hover:bg-blue-100"><Icon name="install" className="h-4 w-4" /></span>
-        <span className="hidden sm:inline">Install app</span>
+      <button type="button" onClick={click} aria-label="Install the app" aria-expanded={help} aria-controls="install-help"
+        className="group inline-flex h-10 items-center gap-2 rounded-xl border border-blue-200 bg-gradient-to-r from-blue-700 to-blue-600 px-2.5 text-xs font-extrabold text-white shadow-sm shadow-blue-900/15 transition hover:from-blue-800 hover:to-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2">
+        <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-white/15 text-white ring-1 ring-inset ring-white/20 transition group-hover:bg-white/20"><Icon name="install" className="h-4 w-4" /></span>
+        <span className="hidden sm:inline">Add to device</span>
       </button>
       {help && (
-        <div className="absolute right-0 mt-2 w-72 max-w-[92vw] z-30 bg-white border border-gray-200 rounded-2xl shadow-xl p-4 space-y-2" role="dialog" aria-label="How to install">
-          <p className="text-sm font-black text-gray-900">Install MTTI Smart Campus</p>
-          {steps.map((s) => <p key={s} className="text-xs text-gray-600">{s}</p>)}
+        <div id="install-help" className="absolute right-0 z-30 mt-2 w-80 max-w-[92vw] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-xl shadow-slate-900/15" role="dialog" aria-label="How to install">
+          <div className="bg-gradient-to-r from-blue-800 to-blue-600 px-4 py-3 text-white">
+            <p className="text-sm font-extrabold">MTTI Smart Campus</p>
+            <p className="mt-0.5 text-[11px] text-blue-100">Install for quick access from your device</p>
+          </div>
+          <div className="space-y-3 p-4">
+            {steps.map((s, index) => (
+              <div key={s} className="flex items-start gap-2.5">
+                <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-blue-50 text-[10px] font-extrabold text-blue-700">{index + 1}</span>
+                <p className="text-xs leading-5 text-slate-600">{s}</p>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>

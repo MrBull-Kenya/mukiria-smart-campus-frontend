@@ -54,6 +54,7 @@ CREATE TABLE IF NOT EXISTS students (
   parent_phone VARCHAR(50) NOT NULL,
   points INT DEFAULT 0,
   attendance_pct DECIMAL(5,2) DEFAULT 100.00,
+  profile_photo_url VARCHAR(255) NULL,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
@@ -93,6 +94,20 @@ CREATE TABLE IF NOT EXISTS sessions (
   late_threshold_mins INT DEFAULT 15,
   is_active BOOLEAN DEFAULT TRUE,
   FOREIGN KEY (class_code) REFERENCES classes(class_code) ON DELETE CASCADE
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS acting_rep_assignments (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  class_code VARCHAR(50) NOT NULL,
+  session_id INT NULL,
+  appointed_by INT NOT NULL,
+  acting_user_id INT NOT NULL,
+  created_at DATETIME NOT NULL,
+  expires_at DATETIME NOT NULL,
+  revoked_at DATETIME NULL,
+  INDEX idx_acting_rep_user_expiry (acting_user_id, expires_at),
+  INDEX idx_acting_rep_class_expiry (class_code, expires_at),
+  INDEX idx_acting_rep_session (session_id)
 ) ENGINE=InnoDB;
 
 -- 7. Attendance Logs (FEAT 1, 2, 3, 4, 5, 16)

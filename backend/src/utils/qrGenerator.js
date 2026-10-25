@@ -8,9 +8,10 @@ const LEEWAY_MS = 15 * 1000; // clock drift + time to scan and upload
 const secret = () => process.env.QR_SECRET || process.env.JWT_SECRET || 'supersecretmtti2026';
 const sign = (body) => crypto.createHmac('sha256', secret()).update(body).digest('base64url');
 
-export function generateSecureToken(class_code, rep_id, venue, session_id = Math.floor(Date.now() / 1000), qrLocation) {
+export function generateSecureToken(class_code, rep_id, venue, session_id = Math.floor(Date.now() / 1000), qrLocation, actingAssignmentId) {
   const payload = {
     class_code, rep_id, venue, session_id,
+    ...(actingAssignmentId ? { acting_assignment_id: actingAssignmentId } : {}),
     qr_lat: qrLocation?.latitude,
     qr_lng: qrLocation?.longitude,
     timestamp: Date.now(),

@@ -3,11 +3,12 @@ import api, { getErrorMessage } from '../../services/api';
 import { useFetch } from '../../hooks/useFetch';
 import FileActions, { fmtSize } from '../../components/FileActions';
 import { Page, Async, Table, Badge, Btn, Card, Notice, statusTone } from '../../components/ui';
+import LiveSessionCard from '../../components/LiveSessionCard';
 
 const MAX_BYTES = 10 * 1024 * 1024; // keep in step with the server limit
 
 export default function TimetableManager() {
-  const state = useFetch('/classrep/timetable');
+  const state = useFetch('/classrep/timetable', { pollMs: 10000 });
   const fileRef = useRef(null);
   const [picked, setPicked] = useState(null);
   const [msg, setMsg] = useState(null);
@@ -55,8 +56,11 @@ export default function TimetableManager() {
       </Card>
 
       <Async state={state}>
-        {(d) => !d.version ? <Notice kind="info">No timetable uploaded yet.</Notice> : (
+        {(d) => (
           <>
+            <LiveSessionCard session={d.liveSession} />
+            {!d.version ? <Notice kind="info">No timetable uploaded yet.</Notice> : (
+            <>
             <Card className="space-y-2">
               <p className="text-sm text-gray-700">
                 Latest upload ({d.version.uploaded}): <strong>{d.version.term}</strong> <Badge tone={statusTone(d.version.status)}>{d.version.status}</Badge>
@@ -72,6 +76,8 @@ export default function TimetableManager() {
             {d.slots.length > 0
               ? <Table rows={d.slots} columns={[{ key: 'day', label: 'Day' }, { key: 'time', label: 'Time' }, { key: 'unit', label: 'Unit' }, { key: 'venue', label: 'Venue' }, { key: 'lecturer', label: 'Lecturer' }]} />
               : <Notice kind="info">This timetable was uploaded as a file, so there is no lesson table. Use View or Download above to open it.</Notice>}
+            </>
+            )}
           </>
         )}
       </Async>

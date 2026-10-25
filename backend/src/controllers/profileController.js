@@ -1,14 +1,39 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import bcrypt from 'bcryptjs';
+import crypto from 'node:crypto';
+import multer from 'multer';
 import pool from '../config/db.js';
+import { UPLOAD_DIR } from '../config/storage.js';
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const PROFILE_PHOTO_DIR = path.join(UPLOAD_DIR, 'profile-photos');
+const PHOTO_EXTENSIONS = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp', 'image/gif': '.gif' };
+export const profilePhotoUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => {
+      fs.mkdir(PROFILE_PHOTO_DIR, { recursive: true })
+        .then(() => cb(null, PROFILE_PHOTO_DIR))
+        .catch(cb);
+    },
+    filename: (_req, file, cb) => cb(null, `${crypto.randomUUID()}${PHOTO_EXTENSIONS[file.mimetype] || ''}`),
+  }),
+  fileFilter: (_req, file, cb) => {
+    if (!PHOTO_EXTENSIONS[file.mimetype]) {
+      cb(new Error('Choose a JPEG, PNG, WebP, or GIF image for your profile photo.'));
+      return;
+    }
+    cb(null, true);
+  },
+  limits: { fileSize: 2 * 1024 * 1024 },
+});
 
 export const profileController = {
   async get(req, res) {
     try {
       const [rows] = await pool.query(
         `SELECT u.id, u.name, u.email, u.role, u.class_code, u.department, u.teacher_unit,
-          s.adm_no, s.parent_email, s.parent_phone
+          s.adm_no, s.parent_email, s.parent_phone, s.profile_photo_url
          FROM users u LEFT JOIN students s ON s.user_id = u.id WHERE u.id = ?`,
         [req.user.id]
       );
@@ -17,6 +42,43 @@ export const profileController = {
     } catch (err) {
       console.error('Could not load account profile:', err);
       res.status(500).json({ error: 'Could not load your profile.' });
+    }
+  },
+
+  async uploadPhoto(req, res) {
+    const file = req.file;
+    if (!file) {
+      return res.status(400).json({ error: 'Choose a JPEG, PNG, WebP, or GIF image to upload as your profile photo.' });
+    }
+
+    try {
+      const relativePath = path.relative(UPLOAD_DIR, file.path).replace(/\\/g, '/');
+      const publicUrl = `/uploads/${relativePath}`;
+      const [students] = await pool.query('SELECT id, profile_photo_url FROM students WHERE user_id = ?', [req.user.id]);
+      if (!students.length) {
+        await fs.unlink(file.path);
+        return res.status(400).json({ error: 'Profile photos are available for student accounts.' });
+      }
+      await pool.query('UPDATE students SET profile_photo_url = ? WHERE user_id = ?', [publicUrl, req.user.id]);
+      const oldPhoto = students[0].profile_photo_url;
+      if (oldPhoto?.startsWith('/uploads/profile-photos/')) {
+        const oldPath = path.resolve(UPLOAD_DIR, oldPhoto.slice('/uploads/'.length));
+        if (path.dirname(oldPath) === PROFILE_PHOTO_DIR && oldPath !== file.path) {
+          await fs.unlink(oldPath).catch((err) => {
+            if (err.code !== 'ENOENT') console.error('Could not remove the previous profile photo:', err);
+          });
+        }
+      }
+      res.json({
+        message: 'Profile photo updated.',
+        user: { id: req.user.id, profile_photo_url: publicUrl },
+      });
+    } catch (err) {
+      await fs.unlink(file.path).catch((cleanupError) => {
+        if (cleanupError.code !== 'ENOENT') console.error('Could not remove an incomplete profile photo upload:', cleanupError);
+      });
+      console.error('Could not save profile photo:', err);
+      res.status(500).json({ error: 'Could not save your profile photo.' });
     }
   },
 

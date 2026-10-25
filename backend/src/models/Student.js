@@ -11,6 +11,7 @@ export const StudentModel = {
         parent_phone VARCHAR(50) NOT NULL,
         points INT DEFAULT 0,
         attendance_pct DECIMAL(5,2) DEFAULT 100.00,
+        profile_photo_url VARCHAR(255) NULL,
         FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
       ) ENGINE=InnoDB;
     `;

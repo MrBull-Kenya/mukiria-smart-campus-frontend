@@ -6,7 +6,49 @@ import { Page, Async, Badge, Btn, Card, Notice, Stat } from '../../components/ui
 const PIN_TOKEN_KEY = 'mtt_manual_attendance_pin';
 const emptyPinForm = { pin: '', confirmPin: '' };
 const emptyChangeForm = { oldPin: '', newPin: '', confirmPin: '' };
-const pinInputClass = 'w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm placeholder:text-slate-400 focus:border-blue-600 focus:ring-2 focus:ring-blue-100';
+const pinInputClass = 'w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 pr-11 text-sm placeholder:text-slate-400 focus:border-blue-600 focus:ring-2 focus:ring-blue-100';
+
+function PinField({ label, value, onChange, name, autoComplete = 'off' }) {
+  const [visible, setVisible] = useState(false);
+  return (
+    <label className="block">
+      <span className="mb-1.5 block text-xs font-bold text-slate-700">{label}</span>
+      <span className="relative block">
+        <input
+          name={name}
+          type={visible ? 'text' : 'password'}
+          inputMode="numeric"
+          pattern="[0-9]{6}"
+          maxLength={6}
+          autoComplete={autoComplete}
+          required
+          value={value}
+          onChange={(event) => onChange(event.target.value.replace(/\D/g, '').slice(0, 6))}
+          placeholder="6-digit PIN"
+          className={pinInputClass}
+        />
+        <button
+          type="button"
+          onClick={() => setVisible((shown) => !shown)}
+          aria-label={visible ? 'Hide PIN' : 'Show PIN'}
+          aria-pressed={visible}
+          className="absolute inset-y-0 right-0 flex items-center px-3 text-slate-500 hover:text-blue-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 rounded-r-xl"
+        >
+          {visible ? (
+            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 3l18 18M10.6 10.7a2 2 0 002.7 2.7M9.9 5.2A10.8 10.8 0 0112 5c5 0 8.5 4.1 9.5 7-.4 1.2-1.2 2.4-2.3 3.5M6.2 6.2C4.2 7.5 2.9 9.5 2.5 12c1 2.9 4.5 7 9.5 7 1.3 0 2.5-.3 3.6-.8" />
+            </svg>
+          ) : (
+            <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M2.5 12S6 5 12 5s9.5 7 9.5 7-3.5 7-9.5 7-9.5-7-9.5-7z" />
+              <circle cx="12" cy="12" r="2.5" />
+            </svg>
+          )}
+        </button>
+      </span>
+    </label>
+  );
+}
 
 export default function ManualAttendance() {
   const pinStatus = useFetch('/classrep/manual-attendance-pin/status');
@@ -33,8 +75,24 @@ export default function ManualAttendance() {
       setMsg({ kind: 'warn', text: 'PIN access expired. Enter your PIN to continue.' });
     };
     window.addEventListener('mtt:manual-attendance-locked', lockPage);
-    return () => window.removeEventListener('mtt:manual-attendance-locked', lockPage);
-  }, []);
+    const handleVisibilityChange = () => {
+      if (document.hidden && unlocked) {
+        sessionStorage.removeItem(PIN_TOKEN_KEY);
+        setUnlocked(false);
+        setChangingPin(false);
+        setPin('');
+        setPinForm(emptyPinForm);
+        setChangeForm(emptyChangeForm);
+        setMsg({ kind: 'warn', text: 'Mark Present locked because you left this tab. Enter your PIN again to continue.' });
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.removeEventListener('mtt:manual-attendance-locked', lockPage);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [unlocked]);
+  useEffect(() => () => sessionStorage.removeItem(PIN_TOKEN_KEY), []);
 
   const visibleStudents = useMemo(() => {
     const term = search.trim().toLowerCase();
@@ -100,22 +158,7 @@ export default function ManualAttendance() {
   };
 
   const pinField = (label, value, onChange, name) => (
-    <label className="block">
-      <span className="mb-1.5 block text-xs font-bold text-slate-700">{label}</span>
-      <input
-        name={name}
-        type="password"
-        inputMode="numeric"
-        pattern="[0-9]{6}"
-        maxLength={6}
-        autoComplete="off"
-        required
-        value={value}
-        onChange={(event) => onChange(event.target.value.replace(/\D/g, '').slice(0, 6))}
-        placeholder="6-digit PIN"
-        className={pinInputClass}
-      />
-    </label>
+    <PinField label={label} value={value} onChange={onChange} name={name} />
   );
 
   return (

@@ -13,6 +13,7 @@ import { DeviceLockModel } from '../models/DeviceLock.js';
 import { allow } from '../utils/rateLimit.js';
 import { calculateDistance, QR_SCAN_RADIUS_METERS, verifyGeofence } from '../config/mttiGPS.js';
 import { verifyToken as verifyQr } from '../utils/qrGenerator.js';
+import { activeActingRepById } from '../utils/actingRep.js';
 
 const CHALLENGE_TTL_MS = 5 * 60 * 1000;
 const ACCOUNT_DISABLED = 'This account cannot sign in. Use your institute password or contact your Administrator.';
@@ -202,6 +203,9 @@ export const passkeyController = {
       const qr = verifyQr(qrToken);
       if (!qr.valid) return res.status(400).json({ error: qr.reason });
       if (Number(qr.data.session_id) !== sessionId) return res.status(400).json({ error: 'QR code does not match this session.' });
+      if (qr.data.acting_assignment_id && !(await activeActingRepById(qr.data.acting_assignment_id, sessionId))) {
+        return res.status(403).json({ error: 'This Acting Rep appointment has expired or been revoked.' });
+      }
       const qrLatitude = Number(qr.data.qr_lat);
       const qrLongitude = Number(qr.data.qr_lng);
       if (!Number.isFinite(qrLatitude) || qrLatitude < -90 || qrLatitude > 90 ||
@@ -209,12 +213,12 @@ export const passkeyController = {
         return res.status(400).json({ error: 'This QR has no valid representative location. Ask the class representative to refresh it.' });
       }
       const campus = verifyGeofence(latitude, longitude);
-      if (!campus.isWithinCampus) {
+      if (req.user.role !== 'student_rep' && !campus.isWithinCampus) {
         return res.status(403).json({ error: `Check-in rejected. You are ${campus.distanceMeters} m from the campus centre; the campus limit is ${process.env.CAMPUS_RADIUS_M || 10000} m.` });
       }
-      const repDistance = Math.round(calculateDistance(latitude, longitude, qrLatitude, qrLongitude));
+      const repDistance = calculateDistance(latitude, longitude, qrLatitude, qrLongitude);
       if (repDistance > QR_SCAN_RADIUS_METERS) {
-        return res.status(403).json({ error: `Move within ${QR_SCAN_RADIUS_METERS} m of the class representative. Your estimated distance is ${repDistance} m.` });
+        return res.status(403).json({ error: `Move within ${QR_SCAN_RADIUS_METERS} m of the class representative. Your estimated distance is ${Math.round(repDistance)} m.` });
       }
       const lock = await DeviceLockModel.findByAdm(student.adm_no);
       if (!lock || lock.device_fingerprint !== deviceId) {
@@ -225,7 +229,7 @@ export const passkeyController = {
         [req.user.id]
       );
       if (!credentials.length) {
-        return res.status(403).json({ error: 'Set up a passkey in My profile before using biometric attendance.' });
+        return res.json({ passkeyAvailable: false, rep_distance_m: Math.round(repDistance), campus_distance_m: campus.distanceMeters });
       }
       const options = await generateAuthenticationOptions({
         rpID: config.rpID,

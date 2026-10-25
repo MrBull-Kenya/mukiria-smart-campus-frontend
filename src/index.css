@@ -5,6 +5,36 @@
 html, body, #root { min-height: 100%; }
 body { @apply bg-slate-50 text-slate-900 antialiased; }
 
+html.dark, html.dark body, html.dark #root {
+  background-color: #020617;
+  color: #e2e8f0;
+}
+
+html.dark [class~="bg-white"] { background-color: #0f172a !important; }
+html.dark [class~="bg-slate-50"], html.dark [class~="bg-gray-50"] { background-color: #111827 !important; }
+html.dark [class~="bg-slate-100"], html.dark [class~="bg-gray-100"] { background-color: #1e293b !important; }
+html.dark [class~="bg-slate-200"], html.dark [class~="bg-gray-200"] { background-color: #334155 !important; }
+html.dark [class~="to-white"] { --tw-gradient-to: #0f172a var(--tw-gradient-to-position) !important; }
+html.dark [class~="from-blue-50"] { --tw-gradient-from: #172554 var(--tw-gradient-from-position) !important; --tw-gradient-to: rgb(23 37 84 / 0) var(--tw-gradient-to-position) !important; }
+html.dark [class~="from-emerald-50"] { --tw-gradient-from: #064e3b var(--tw-gradient-from-position) !important; --tw-gradient-to: rgb(6 78 59 / 0) var(--tw-gradient-to-position) !important; }
+html.dark [class~="text-slate-900"], html.dark [class~="text-slate-800"], html.dark [class~="text-gray-900"], html.dark [class~="text-gray-800"] { color: #f1f5f9 !important; }
+html.dark [class~="text-slate-700"], html.dark [class~="text-gray-700"] { color: #e2e8f0 !important; }
+html.dark [class~="text-slate-600"], html.dark [class~="text-gray-600"] { color: #cbd5e1 !important; }
+html.dark [class~="text-slate-500"], html.dark [class~="text-gray-500"] { color: #94a3b8 !important; }
+html.dark [class~="text-slate-400"], html.dark [class~="text-gray-400"] { color: #64748b !important; }
+html.dark [class~="border-slate-100"], html.dark [class~="border-gray-100"] { border-color: #1e293b !important; }
+html.dark [class~="border-slate-200"], html.dark [class~="border-gray-200"] { border-color: #334155 !important; }
+html.dark [class~="border-slate-300"], html.dark [class~="border-gray-300"] { border-color: #475569 !important; }
+html.dark input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="hidden"]),
+html.dark select,
+html.dark textarea {
+  background-color: #0f172a;
+  border-color: #475569;
+  color: #e2e8f0;
+}
+
+html.dark input::placeholder, html.dark textarea::placeholder { color: #64748b; }
+
 button, a, input, select, textarea {
   -webkit-tap-highlight-color: transparent;
 }

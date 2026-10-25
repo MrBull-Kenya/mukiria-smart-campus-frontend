@@ -7,18 +7,18 @@ import { getErrorMessage } from '../../services/api';
 import { CAMPUS } from '../../config/campus';
 
 /**
- * Submit a verified QR check-in with an online passkey assertion and current GPS location.
+ * Submit a verified QR check-in with current GPS location and a passkey when one is enrolled.
  */
 export default function SubmitQrCheckin({ sessionId, qrToken, admNo, onComplete, onCancel }) {
   const { deviceId } = useAuth();
   const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState({ kind: 'info', text: 'Check in online using your enrolled passkey and this device’s location.' });
+  const [note, setNote] = useState({ kind: 'info', text: 'Check in online using this device’s location. Your enrolled passkey will be used when available.' });
 
   const handleCheckin = async () => {
     if (busy) return;
     setBusy(true);
     if (!navigator.onLine) {
-      setNote({ kind: 'error', text: 'Biometric attendance requires an internet connection. Reconnect and scan the current QR code.' });
+      setNote({ kind: 'error', text: 'QR attendance requires an internet connection. Reconnect and scan the current QR code.' });
       setBusy(false);
       return;
     }
@@ -43,10 +43,15 @@ export default function SubmitQrCheckin({ sessionId, qrToken, admNo, onComplete,
     };
 
     try {
-      setNote({ kind: 'info', text: 'Preparing secure biometric verification…' });
+      setNote({ kind: 'info', text: 'Checking your passkey setup…' });
       const { data: challengeData } = await getAttendancePasskeyOptions(fields);
-      setNote({ kind: 'info', text: 'Confirm your identity with your device passkey…' });
-      const passkeyResponse = await startAuthentication({ optionsJSON: challengeData.options });
+      let passkeyResponse;
+      if (challengeData.passkeyAvailable) {
+        setNote({ kind: 'info', text: 'Confirm your identity with your device passkey…' });
+        passkeyResponse = await startAuthentication({ optionsJSON: challengeData.options });
+      } else {
+        setNote({ kind: 'info', text: 'No passkey is enrolled; completing check-in with your QR code and location…' });
+      }
       if (!navigator.onLine) {
         setNote({ kind: 'error', text: 'You went offline before verification completed. No check-in was recorded. Reconnect and scan the current QR again.' });
         setBusy(false);
@@ -54,8 +59,10 @@ export default function SubmitQrCheckin({ sessionId, qrToken, admNo, onComplete,
       }
       const res = await submitScan({
         ...fields,
-        passkey_challenge: challengeData.options.challenge,
-        passkey_response: passkeyResponse,
+        ...(passkeyResponse ? {
+          passkey_challenge: challengeData.options.challenge,
+          passkey_response: passkeyResponse,
+        } : {}),
       });
       onComplete(res.data);
     } catch (err) {

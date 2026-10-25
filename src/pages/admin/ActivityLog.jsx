@@ -8,11 +8,11 @@ export default function ActivityLog() {
   const entries = useMemo(() => {
     const term = search.trim().toLowerCase();
     const rows = state.data || [];
-    return term ? rows.filter((row) => `${row.actor} ${row.role} ${row.method} ${row.route} ${row.status}`.toLowerCase().includes(term)) : rows;
+    return term ? rows.filter((row) => `${row.actor} ${row.role} ${row.method} ${row.route} ${row.status} ${row.time}`.toLowerCase().includes(term)) : rows;
   }, [state.data, search]);
 
   return (
-    <Page title="Live activity log" subtitle="Recent account actions across the campus system · updates every 5 seconds">
+    <Page title="Live activity log" subtitle="Recent account changes across the campus system · timestamps use East Africa Time · updates every 5 seconds">
       <Async state={state}>
         {(rows) => (
           <>
@@ -29,6 +29,7 @@ export default function ActivityLog() {
               { key: 'role', label: 'Role', render: (row) => <Badge tone="blue">{row.role}</Badge> },
               { key: 'action', label: 'Action', render: (row) => <span className="font-semibold">{row.method} <code className="text-xs text-gray-600">{row.route}</code></span> },
               { key: 'status', label: 'Result', render: (row) => <Badge tone={row.status >= 200 && row.status < 300 ? 'green' : 'amber'}>{row.status}</Badge> },
+              { key: 'durationMs', label: 'Response', render: (row) => row.durationMs == null ? '—' : `${row.durationMs} ms` },
             ]} />
           </>
         )}
