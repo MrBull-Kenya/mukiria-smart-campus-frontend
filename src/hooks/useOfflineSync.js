@@ -1,15 +1,11 @@
 import { useState, useEffect, useCallback } from 'react';
 import { getAllOfflineData, deleteOfflineData, saveOfflineData, QUEUE_EVENT } from '../services/offlineDB';
-import { submitScan, dataUrlToBlob } from '../services/attendance';
 import api from '../services/api';
 
 // One shared lock so several components using this hook can't upload the same scan twice.
 let inFlight = null;
 
 const replay = (item) => {
-  if (item.type === 'attendance_scan') {
-    return submitScan({ ...item.fields, is_offline_synced: true }, item.photo ? dataUrlToBlob(item.photo) : undefined);
-  }
   return api({ method: item.method || 'POST', url: item.url, data: item.data });
 };
 
@@ -25,6 +21,15 @@ async function syncAll() {
   let synced = 0, failed = 0;
   for (const item of items) {
     if (item.rejected) continue;
+    if (item.type === 'attendance_scan') {
+      failed++;
+      await saveOfflineData('syncQueue', {
+        ...item,
+        rejected: true,
+        reason: 'Offline attendance cannot be biometrically verified. Scan the current QR while online to record attendance.',
+      });
+      continue;
+    }
     try {
       await replay(item);
       await deleteOfflineData('syncQueue', item.id);

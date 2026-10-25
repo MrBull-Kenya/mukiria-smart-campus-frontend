@@ -27,7 +27,10 @@ const statements = [
   'ALTER TABLE timetable_versions ADD COLUMN file_path VARCHAR(255) NULL',
   'ALTER TABLE timetable_versions ADD COLUMN file_type VARCHAR(100) NULL',
   'ALTER TABLE timetable_versions ADD COLUMN file_size INT NULL',
+  'ALTER TABLE timetable_versions ADD COLUMN approved_at DATETIME NULL',
+  "UPDATE timetable_versions SET approved_at = created_at WHERE status = 'approved' AND approved_at IS NULL",
   "ALTER TABLE parent_alerts ADD COLUMN delivery VARCHAR(30) DEFAULT 'logged'",
+  'ALTER TABLE attendance_logs ADD COLUMN rep_distance_m INT NULL',
   `CREATE TABLE IF NOT EXISTS fee_accounts (
      adm_no VARCHAR(50) PRIMARY KEY,
      total_fees INT NOT NULL DEFAULT 0,
@@ -44,6 +47,29 @@ const statements = [
      status_code INT NOT NULL,
      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
    ) ENGINE=InnoDB`,
+  `CREATE TABLE IF NOT EXISTS passkey_credentials (
+      credential_hash CHAR(64) PRIMARY KEY,
+      credential_id VARCHAR(1024) NOT NULL,
+      user_id INT NOT NULL,
+     public_key TEXT NOT NULL,
+     counter BIGINT UNSIGNED NOT NULL DEFAULT 0,
+     transports TEXT NULL,
+     name VARCHAR(100) NOT NULL DEFAULT 'Passkey',
+     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+     CONSTRAINT fk_passkey_credentials_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+   ) ENGINE=InnoDB`,
+  'CREATE INDEX idx_passkey_credentials_user ON passkey_credentials (user_id)',
+  `CREATE TABLE IF NOT EXISTS passkey_challenges (
+     challenge VARCHAR(255) PRIMARY KEY,
+     user_id INT NULL,
+     purpose VARCHAR(20) NOT NULL,
+     context_hash CHAR(64) NULL,
+     expires_at DATETIME NOT NULL,
+     consumed_at DATETIME NULL
+   ) ENGINE=InnoDB`,
+  'ALTER TABLE push_subscriptions ADD COLUMN baseline_complete TINYINT NOT NULL DEFAULT 0',
+  'ALTER TABLE passkey_challenges ADD COLUMN context_hash CHAR(64) NULL',
+  'CREATE INDEX idx_passkey_challenges_expiry ON passkey_challenges (expires_at)',
   'CREATE INDEX idx_activity_logs_created_at ON activity_logs (created_at)',
   // One check-in per student per session (also enforced in code)
   'CREATE UNIQUE INDEX uq_attendance_session_adm ON attendance_logs (session_id, adm_no)',

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useFetch } from '../../hooks/useFetch';
-import { Page, Async, Table, Badge, Notice } from '../../components/ui';
+import { Page, Async, Table, Badge, Notice, Stat } from '../../components/ui';
 import DepartmentClassFilters from '../../components/DepartmentClassFilters';
 
 export default function AtRiskStudents() {
@@ -26,10 +26,15 @@ export default function AtRiskStudents() {
                 const rows = data.students.filter((student) =>
                   (!department || student.department === department) && (!classCode || student.classCode === classCode)
                 );
-                return <Table rows={rows} empty={`Nobody is below ${data.threshold}% for this filter. 🎉`} columns={[
+                return (
+                  <>
+                    <Stat label="Students at risk" value={rows.length} tone={rows.length ? 'amber' : 'green'} hint={rows.length ? `Attendance below ${data.threshold}%` : 'No students match these filters'} />
+                    <Table rows={rows} empty={`No students are below ${data.threshold}% attendance for this filter.`} columns={[
                   { key: 'name', label: 'Name' }, { key: 'adm', label: 'Adm no' }, { key: 'department', label: 'Department', render: (row) => row.department || '—' }, { key: 'classCode', label: 'Class' },
-                  { key: 'attendance', label: 'Attendance', render: (row) => <Badge tone="red">{row.attendance.toFixed(1)}%</Badge> }, { key: 'missed', label: 'Sessions missed' },
-                ]} />;
+                  { key: 'attendance', label: 'Attendance', render: (row) => <Badge tone="red">{Number(row.attendance).toFixed(1)}%</Badge> }, { key: 'missed', label: 'Sessions missed' },
+                    ]} pageSize={25} searchable />
+                  </>
+                );
               }}
             </Async>
           </>

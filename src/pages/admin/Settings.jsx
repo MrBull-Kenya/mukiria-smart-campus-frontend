@@ -20,7 +20,7 @@ function EmailCard() {
 
   return (
     <Card className="max-w-xl space-y-3">
-      <p className="text-sm font-bold text-gray-800">Email (password-reset links)</p>
+      <p className="text-sm font-bold text-blue-800">Email (password-reset links)</p>
       <Async state={state}>
         {(e) => (
           <>
@@ -48,8 +48,8 @@ function EmailCard() {
             {e.configured && !e.frontendUrl && <Notice kind="warn">FRONTEND_URL is not set, so emails will contain a code instead of a clickable link. Set it to the address people open the app at.</Notice>}
             <div className="flex flex-wrap items-end gap-2 pt-1">
               <label className="block flex-1 min-w-[12rem]">
-                <span className="block text-xs font-bold text-gray-700 mb-1">Send a test email to</span>
-                <input type="email" value={to} onChange={(ev) => setTo(ev.target.value)} placeholder="leave empty to use your own email" className="w-full bg-gray-50 border border-gray-300 rounded-xl px-3 py-2 text-sm" />
+                <span className="mb-1.5 block text-xs font-bold text-slate-700">Send a test email to</span>
+                <input type="email" value={to} onChange={(ev) => setTo(ev.target.value)} placeholder="leave empty to use your own email" className="w-full px-3 py-2.5 focus:border-blue-600 focus:ring-2 focus:ring-blue-100" />
               </label>
               <Btn onClick={sendTest} disabled={busy || !e.configured}>{busy ? 'Sending…' : 'Send test email'}</Btn>
             </div>
@@ -86,9 +86,9 @@ export default function AdminSettings() {
                 <Stat label="Current week" value={d.currentWeek ? `Week ${d.currentWeek}` : '—'} tone="blue" />
               </div>
               <Card className="max-w-md space-y-3">
-                <p className="text-sm font-bold text-gray-800">Term start date</p>
+                <p className="text-sm font-bold text-blue-800">Term start date</p>
                 <p className="text-xs text-gray-600">The first day of <strong>week 1</strong> of the term. The register's <strong>WEEK</strong> field is counted from this date (any day in the first week works). Update it each term.</p>
-                <input type="date" value={shown} onChange={(e) => setValue(e.target.value)} className="bg-gray-50 border border-gray-300 rounded-xl px-3 py-2 text-sm" />
+                <label className="block"><span className="mb-1.5 block text-xs font-bold text-slate-700">Week 1 starts on</span><input type="date" value={shown} onChange={(e) => setValue(e.target.value)} className="w-full px-3 py-2.5 focus:border-blue-600 focus:ring-2 focus:ring-blue-100" /></label>
                 {msg && <Notice kind={msg.kind}>{msg.text}</Notice>}
                 <div className="flex gap-2">
                   <Btn onClick={() => save(shown)} disabled={busy || !shown}>{busy ? 'Saving…' : 'Save'}</Btn>

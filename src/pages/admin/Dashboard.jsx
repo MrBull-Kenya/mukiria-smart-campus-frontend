@@ -13,7 +13,7 @@ export default function AdminDashboard() {
             {d.pendingStaff > 0 && <Notice kind="warn"><strong>{d.pendingStaff}</strong> staff registration(s) are waiting for your approval. <Link to="/admin/staff" className="underline font-bold">Review</Link></Notice>}
             {!d.termStart && <Notice kind="info">The term start date isn't set, so printed attendance registers will have a blank WEEK number. <Link to="/admin/settings" className="underline font-bold">Set it</Link></Notice>}
             {d.classes === 0 && <Notice kind="info">No classes exist yet, so nobody can register as a student. <Link to="/admin/classes" className="underline font-bold">Add the first class</Link></Notice>}
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <section aria-label="Institute account summary" className="grid grid-cols-2 gap-3 md:grid-cols-4">
               <Stat label="Classes" value={d.classes} tone="blue" />
               <Stat label="Students" value={d.students} />
               <Stat label="Class reps" value={d.reps} />
@@ -22,13 +22,13 @@ export default function AdminDashboard() {
               <Stat label="Administrators" value={d.admins} />
               <Stat label="Staff awaiting approval" value={d.pendingStaff} tone={d.pendingStaff ? 'amber' : 'green'} />
               <Stat label="Reps awaiting HOD" value={d.pendingReps} tone={d.pendingReps ? 'amber' : 'green'} />
-            </div>
+            </section>
             <LinkGrid Link={Link} items={[
-              { to: '/admin/classes', icon: '🏫', label: 'Classes', hint: 'Add or remove classes' },
-              { to: '/admin/staff', icon: '👥', label: 'Staff accounts', hint: 'Approve, add, deactivate' },
-              { to: '/admin/activity', icon: '🕒', label: 'Live activity log', hint: 'See recent account actions' },
-              { to: '/admin/settings', icon: '⚙️', label: 'Settings', hint: 'Term start date' },
-              { to: '/hod/dashboard', icon: '📊', label: 'Department overview', hint: 'Reports and attendance' },
+              { to: '/admin/classes', icon: 'school', label: 'Classes', hint: 'Add or manage institute classes' },
+              { to: '/admin/staff', icon: 'users', label: 'Staff accounts', hint: 'Approve, add, edit, and deactivate' , primary: true },
+              { to: '/admin/activity', icon: 'activity', label: 'Live activity log', hint: 'Review recent account actions' },
+              { to: '/admin/settings', icon: 'settings', label: 'Settings', hint: 'Configure the current term' },
+              { to: '/hod/dashboard', icon: 'chart', label: 'Department overview', hint: 'Reports and attendance' },
             ]} />
           </>
         )}

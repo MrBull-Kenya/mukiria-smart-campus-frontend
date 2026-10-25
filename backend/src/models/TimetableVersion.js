@@ -10,6 +10,7 @@ export const TimetableVersionModel = {
         status ENUM('pending', 'approved', 'rejected') DEFAULT 'pending',
         hod_comment TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        approved_at DATETIME NULL,
         FOREIGN KEY (class_code) REFERENCES classes(class_code) ON DELETE CASCADE
       ) ENGINE=InnoDB;
     `;

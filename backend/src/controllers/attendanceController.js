@@ -2,6 +2,7 @@ import { calculateDistance, QR_SCAN_RADIUS_METERS, verifyGeofence } from '../con
 import { verifyToken as verifyQr } from '../utils/qrGenerator.js';
 import { DeviceLockModel } from '../models/DeviceLock.js';
 import { one, q, exec, sqlDate, asDate, pct1 } from '../utils/dbHelpers.js';
+import { passkeyController } from './passkeyController.js';
 
 export const POINTS_ON_TIME = 15;
 export const POINTS_LATE = 5;
@@ -34,8 +35,10 @@ export async function awardBadges(adm_no) {
 export const attendanceController = {
   async scanAttendance(req, res) {
     try {
-      const { session_id, gps_lat, gps_lng, device_id, qr_token, is_offline_synced, scanned_at } = req.body;
-      const offline = String(is_offline_synced) === 'true';
+      const { session_id, gps_lat, gps_lng, device_id, qr_token, is_offline_synced } = req.body;
+      if (String(is_offline_synced) === 'true') {
+        return res.status(403).json({ error: 'Offline scans cannot be verified as biometric attendance. Please scan the current QR and verify your passkey while online.' });
+      }
 
       // 1. Who is scanning: the signed-in student (never trust a client-supplied admission number)
       const student = await one(
@@ -50,13 +53,13 @@ export const attendanceController = {
       // 2. Session must exist, be live and belong to the student's class
       const session = await one('SELECT * FROM sessions WHERE id = ?', [session_id]);
       if (!session) return res.status(404).json({ error: 'Unknown class session.' });
-      if (!session.is_active && !offline) return res.status(400).json({ error: 'This class session has ended.' });
+      if (!session.is_active) return res.status(400).json({ error: 'This class session has ended.' });
       if (session.class_code !== student.class_code) {
         return res.status(403).json({ error: `This session is for class ${session.class_code}, not ${student.class_code}.` });
       }
 
-      // 3. QR token: genuine (HMAC), for this session, and fresh (offline replays skip only the freshness check)
-      const v = verifyQr(qr_token, { ignoreExpiry: offline });
+      // 3. QR token: genuine (HMAC), for this session, and fresh.
+      const v = verifyQr(qr_token);
       if (!v.valid) return res.status(400).json({ error: v.reason });
       if (Number(v.data.session_id) !== Number(session.id)) return res.status(400).json({ error: 'QR code does not match this session.' });
 
@@ -91,21 +94,38 @@ export const attendanceController = {
         return res.status(409).json({ error: 'You have already checked in for this session.' });
       }
 
-      // 7. Late threshold (FEAT 4). Offline scans use the time the student actually scanned, clamped to [start, now].
-      let when = new Date();
-      if (offline && scanned_at) {
-        const t = new Date(Number(scanned_at) || scanned_at);
-        if (!Number.isNaN(t.getTime())) when = new Date(Math.min(Math.max(t.getTime(), asDate(session.start_time).getTime()), Date.now()));
+      if (!req.body.passkey_challenge || !req.body.passkey_response) {
+        return res.status(403).json({ error: 'Biometric verification is required to record attendance.' });
       }
+      let passkeyResponse;
+      try {
+        passkeyResponse = JSON.parse(req.body.passkey_response);
+      } catch {
+        return res.status(400).json({ error: 'The biometric response is invalid. Please verify your passkey again.' });
+      }
+      const biometric = await passkeyController.verifyAttendance({
+        userId: req.user.id,
+        challenge: req.body.passkey_challenge,
+        response: passkeyResponse,
+        sessionId: Number(session.id),
+        qrToken: qr_token,
+        latitude: Number(gps_lat),
+        longitude: Number(gps_lng),
+        deviceId: device_id,
+      });
+      if (!biometric.ok) return res.status(biometric.status).json({ error: biometric.error });
+
+      // 7. Late threshold (FEAT 4).
+      let when = new Date();
       const minsIn = (when - asDate(session.start_time)) / 60000;
       const is_late = minsIn > (session.late_threshold_mins || 15);
       const points_earned = is_late ? POINTS_LATE : POINTS_ON_TIME;
 
       const photo_url = req.file ? req.file.path.replace(/\\/g, '/') : null;
       const log = await exec(
-        `INSERT INTO attendance_logs (session_id, adm_no, photo_url, gps_lat, gps_lng, is_late, is_offline_synced, device_id, points_earned, timestamp)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [session.id, student.adm_no, photo_url, gps_lat, gps_lng, is_late ? 1 : 0, offline ? 1 : 0, device_id || null, points_earned, sqlDate(when)]
+        `INSERT INTO attendance_logs (session_id, adm_no, photo_url, gps_lat, gps_lng, rep_distance_m, is_late, is_offline_synced, device_id, points_earned, timestamp)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [session.id, student.adm_no, photo_url, gps_lat, gps_lng, Math.round(qrDistance), is_late ? 1 : 0, 0, device_id || null, points_earned, sqlDate(when)]
       );
 
       await exec('UPDATE students SET points = points + ? WHERE adm_no = ?', [points_earned, student.adm_no]);
@@ -114,7 +134,7 @@ export const attendanceController = {
       await awardBadges(student.adm_no);
 
       req.app.get('io')?.to(session.class_code).emit('attendance_update', { class_code: session.class_code, adm_no: student.adm_no, name: student.name, is_late });
-      res.status(201).json({ message: 'Attendance recorded successfully.', is_late, points_earned, logId: log.insertId });
+      res.status(201).json({ message: 'Attendance recorded successfully.', is_late, points_earned, rep_distance_m: Math.round(qrDistance), logId: log.insertId });
     } catch (err) {
       console.error('Attendance scan error:', err);
       res.status(500).json({ error: 'Failed to log attendance.' });

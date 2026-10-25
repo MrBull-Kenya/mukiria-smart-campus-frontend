@@ -19,6 +19,9 @@ export function parseQrToken(text) {
 // Server-side check of signature/expiry (30 s window). Uses the server clock, not the phone's.
 export const verifyQrToken = (token) => api.post('/qr/verify', { token });
 
+export const getAttendancePasskeyOptions = (fields) =>
+  api.post('/attendance/passkey/options', fields);
+
 export function dataUrlToBlob(dataUrl) {
   const [head, body] = dataUrl.split(',');
   const mime = /data:([^;]+)/.exec(head)?.[1] || 'image/jpeg';
@@ -36,7 +39,7 @@ export function dataUrlToBlob(dataUrl) {
 export function submitScan(fields, photoBlob) {
   const fd = new FormData();
   Object.entries(fields).forEach(([k, v]) => {
-    if (v !== undefined && v !== null) fd.append(k, String(v));
+    if (v !== undefined && v !== null) fd.append(k, typeof v === 'object' ? JSON.stringify(v) : String(v));
   });
   if (photoBlob) fd.append('photo', photoBlob, 'selfie.jpg');
   return api.post('/attendance/scan', fd);

@@ -10,16 +10,16 @@ export default function TeacherDashboard() {
       <Async state={state}>
         {(d) => (
           <>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <section aria-label="Teaching overview" className="grid grid-cols-2 gap-3 md:grid-cols-4">
               <Stat label="Awaiting your sign-off" value={d.pendingSignoffs} tone={d.pendingSignoffs ? 'amber' : 'green'} />
               <Stat label="Sessions in progress" value={d.activeSessions} tone="blue" />
               <Stat label="Units taught" value={d.units} />
               <Stat label="At-risk students" value={d.atRiskStudents} tone="red" />
-            </div>
+            </section>
             <LinkGrid Link={Link} items={[
-              { to: '/teacher/sign-attendance', icon: '✍️', label: 'Sign attendance', hint: 'Confirm lessons' },
-              { to: '/teacher/absent', icon: '📋', label: 'Absent trainees', hint: 'Review a selected lesson' },
-              { to: '/teacher/absenteeism', icon: '📉', label: 'Absenteeism by unit' },
+              { to: '/teacher/sign-attendance', icon: 'pen', label: 'Sign attendance', hint: 'Review and confirm lesson registers', primary: true },
+              { to: '/teacher/absent', icon: 'clipboard', label: 'Absent trainees', hint: 'Review absences for a selected lesson' },
+              { to: '/teacher/absenteeism', icon: 'chart', label: 'Absenteeism by unit' },
             ]} />
           </>
         )}

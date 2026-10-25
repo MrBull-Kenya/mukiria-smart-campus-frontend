@@ -6,7 +6,7 @@ import { Page, Async, Badge, Btn, Card, Notice, Stat } from '../../components/ui
 const PIN_TOKEN_KEY = 'mtt_manual_attendance_pin';
 const emptyPinForm = { pin: '', confirmPin: '' };
 const emptyChangeForm = { oldPin: '', newPin: '', confirmPin: '' };
-const pinInputClass = 'w-full bg-gray-50 border border-gray-300 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-blue-500';
+const pinInputClass = 'w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm placeholder:text-slate-400 focus:border-blue-600 focus:ring-2 focus:ring-blue-100';
 
 export default function ManualAttendance() {
   const pinStatus = useFetch('/classrep/manual-attendance-pin/status');
@@ -101,7 +101,7 @@ export default function ManualAttendance() {
 
   const pinField = (label, value, onChange, name) => (
     <label className="block">
-      <span className="block text-xs font-bold text-gray-700 mb-1">{label}</span>
+      <span className="mb-1.5 block text-xs font-bold text-slate-700">{label}</span>
       <input
         name={name}
         type="password"
@@ -123,10 +123,10 @@ export default function ManualAttendance() {
       {msg && <Notice kind={msg.kind}>{msg.text}</Notice>}
       <Async state={pinStatus}>
         {() => !unlocked ? (
-          <Card className="mx-auto max-w-md space-y-4">
+          <Card className="mx-auto max-w-md space-y-4 border-blue-100 shadow-md shadow-blue-950/[0.04]">
             <div>
-              <h2 className="text-base font-black text-gray-900">{configured ? 'Unlock Mark Present' : 'Set up your Mark Present PIN'}</h2>
-              <p className="mt-1 text-sm text-gray-600">
+              <h2 className="text-base font-extrabold text-blue-800">{configured ? 'Unlock Mark Present' : 'Set up your Mark Present PIN'}</h2>
+              <p className="mt-1 text-sm leading-6 text-slate-600">
                 {configured ? 'Enter your six-digit PIN to authorize attendance marking for 10 minutes.' : 'Create a six-digit PIN. You will need it each time you open this page.'}
               </p>
             </div>
@@ -148,7 +148,7 @@ export default function ManualAttendance() {
           <>
             {changingPin && (
               <Card className="mb-4 max-w-md space-y-3">
-                <h2 className="text-base font-black text-gray-900">Change Mark Present PIN</h2>
+                <h2 className="text-base font-extrabold text-blue-800">Change Mark Present PIN</h2>
                 <form onSubmit={changePin} className="space-y-3">
                   {pinField('Current PIN', changeForm.oldPin, (value) => setChangeForm((current) => ({ ...current, oldPin: value })), 'oldPin')}
                   {pinField('New PIN', changeForm.newPin, (value) => setChangeForm((current) => ({ ...current, newPin: value })), 'newPin')}
@@ -179,8 +179,8 @@ export default function ManualAttendance() {
                   <Notice kind="info">Only mark a student after confirming they are physically present. Each student can be recorded once per active session. Manual check-ins are attributed to your rep account.</Notice>
                   <Card className="space-y-3">
                     <label className="block">
-                      <span className="block text-xs font-bold text-gray-700 mb-1">Find a student</span>
-                      <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search name or admission number" className={pinInputClass} />
+                      <span className="mb-1.5 block text-xs font-bold text-slate-700">Find a student</span>
+                      <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search name or admission number" className={pinInputClass} />
                     </label>
                     {visibleStudents.length === 0 ? (
                       <p className="py-4 text-center text-sm text-gray-500">{students.length ? 'No students match your search.' : 'No active students are registered in this class.'}</p>

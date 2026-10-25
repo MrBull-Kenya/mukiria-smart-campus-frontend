@@ -791,7 +791,12 @@ export const hod = {
   timetableDecision: wrap(async (req, res) => {
     const decision = req.body.decision === 'approved' ? 'approved' : req.body.decision === 'rejected' ? 'rejected' : null;
     if (!decision) return bad(res, 'decision must be "approved" or "rejected".');
-    const r = await exec('UPDATE timetable_versions SET status = ?, hod_comment = ? WHERE id = ?', [decision, req.body.comment || null, req.params.id]);
+    const timetable = await one('SELECT class_code, term, status FROM timetable_versions WHERE id = ?', [req.params.id]);
+    if (!timetable) return bad(res, 'Timetable not found.', 404);
+    const r = await exec(
+      "UPDATE timetable_versions SET status = ?, hod_comment = ?, approved_at = CASE WHEN ? = 'approved' THEN CURRENT_TIMESTAMP ELSE NULL END WHERE id = ?",
+      [decision, req.body.comment || null, decision, req.params.id]
+    );
     if (!r.affectedRows) return bad(res, 'Timetable not found.', 404);
     res.json({ message: `Timetable ${decision}.` });
   }),
@@ -1572,8 +1577,9 @@ export const weeklySheetHod = wrap(async (req, res) => {
 const daysAgo = (n) => new Date(Date.now() - n * 86400000);
 const KIND_ORDER = { warn: 0, ok: 1, info: 2 };
 
-export const notifications = wrap(async (req, res) => {
-  const role = req.user.role, items = [];
+export async function buildNotificationItems(user) {
+  const req = { user };
+  const role = user.role, items = [];
   const add = (id, kind, icon, title, text, link, when) => items.push({ id, kind, icon, title, text, link, when: when ? `${fmtDate(when)} ${fmtTime(when)}` : null });
   const count = async (sql, params = []) => (await one(sql, params)).n;
   const weekend = (() => { const d = new Date().getDay(); return d === 5 || d === 6 || d === 0; })(); // Friday to Sunday
@@ -1587,6 +1593,10 @@ export const notifications = wrap(async (req, res) => {
       if ((await sessionsHeld(st.class_code)) > 0 && pct < T) add(`low-${Math.floor(pct)}`, 'warn', '⚠️', `Your attendance is ${pct.toFixed(1)}%`, `You need at least ${T}% to sit exams.`, '/student/exam-eligibility');
       for (const a of await q('SELECT id, message, created_at FROM chat_messages WHERE class_code = ? AND is_announcement = 1 AND created_at >= ? ORDER BY id DESC LIMIT 5', [st.class_code, sqlDate(daysAgo(7))])) add(`ann-${a.id}`, 'info', '📢', 'Class announcement', a.message, '/student/chat', a.created_at);
       for (const t of await q("SELECT id, status, created_at FROM temp_id_requests WHERE adm_no = ? AND status IN ('approved', 'rejected') AND created_at >= ? ORDER BY id DESC LIMIT 3", [st.adm_no, sqlDate(daysAgo(7))])) add(`tid-${t.id}-${t.status}`, t.status === 'approved' ? 'ok' : 'warn', '🪪', `Your temporary ID was ${t.status}`, t.status === 'approved' ? 'It is valid for 24 hours.' : 'Ask your class rep if you still need one.', '/student/request-temp-id', t.created_at);
+      if (role === 'student') {
+        const tt = await one("SELECT id, term FROM timetable_versions WHERE class_code = ? AND status = 'approved' AND approved_at >= ? ORDER BY id DESC LIMIT 1", [st.class_code, sqlDate(daysAgo(14))]);
+        if (tt) add(`student-tt-${tt.id}`, 'info', '🗓️', 'Class timetable updated', `The ${tt.term} timetable is now available.`, '/student/timetable');
+      }
       if (role === 'student_rep') {
         const waiting = await count("SELECT COUNT(*) AS n FROM temp_id_requests t JOIN students s ON s.adm_no = t.adm_no JOIN users u ON u.id = s.user_id WHERE u.class_code = ? AND t.status = 'pending'", [st.class_code]);
         if (waiting) add(`rep-tid-${waiting}`, 'warn', '🪪', `${waiting} temporary ID request${waiting > 1 ? 's' : ''} waiting`, 'Students in your class are waiting for you to approve.', '/rep/temp-ids');
@@ -1614,5 +1624,9 @@ export const notifications = wrap(async (req, res) => {
     }
   }
   items.sort((a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind]);
-  res.json({ items: items.slice(0, 20) });
+  return items.slice(0, 20);
+}
+
+export const notifications = wrap(async (req, res) => {
+  res.json({ items: await buildNotificationItems(req.user) });
 });

@@ -18,12 +18,12 @@ export default function ActivityLog() {
           <>
             <Card className="flex flex-wrap items-end justify-between gap-3">
               <label className="block w-full max-w-lg">
-                <span className="mb-1 block text-xs font-bold text-gray-700">Search activity</span>
-                <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search a person, role, action, or endpoint" className="w-full rounded-xl border border-gray-300 bg-gray-50 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none" />
+                <span className="mb-1.5 block text-xs font-bold text-slate-700">Search activity</span>
+                <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search a person, role, action, or endpoint" className="w-full px-3 py-2.5 focus:border-blue-600 focus:ring-2 focus:ring-blue-100" />
               </label>
-              <span className="pb-2 text-xs text-gray-500">Showing {entries.length} of {rows.length} recent actions</span>
+              <span aria-live="polite" className="pb-2 text-xs font-medium text-slate-500">Showing {entries.length} of {rows.length} recent actions</span>
             </Card>
-            <Table rows={entries} empty="No account actions have been recorded yet." columns={[
+            <Table rows={entries} empty="No account actions have been recorded yet." pageSize={25} columns={[
               { key: 'time', label: 'When' },
               { key: 'actor', label: 'Who' },
               { key: 'role', label: 'Role', render: (row) => <Badge tone="blue">{row.role}</Badge> },

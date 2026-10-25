@@ -22,6 +22,8 @@ import qrRoutes from './routes/qrRoutes.js';
 import { studentRouter, classrepRouter, teacherRouter, hodRouter, campusRouter, adminRouter } from './routes/appRoutes.js';
 import { notifications } from './controllers/appController.js';
 import profileRoutes from './routes/profileRoutes.js';
+import pushRoutes from './routes/pushRoutes.js';
+import { startPushNotificationPolling } from './controllers/pushController.js';
 
 
 dotenv.config();
@@ -56,12 +58,15 @@ app.use((req, res, next) => {
   next();
 });
 
+app.get('/api/health', (_req, res) => res.json({ status: 'ok' }));
+
 // API Routes Mapping
 app.set('io', io);
 
 // Public: login / registration / password reset (verify-token guards itself) and the class list used by the register forms
 app.use('/api/auth', authRoutes);
 app.use('/api/profile', verifyToken, profileRoutes);
+app.use('/api/push', verifyToken, pushRoutes);
 // (the register forms need the list before login; creating classes is Administrator-only, see /api/admin/classes)
 app.use('/api/classes', (req, res, next) => (req.method === 'GET' && req.path === '/list' ? next() : verifyToken(req, res, () => requireRole('admin')(req, res, next))), classRoutes);
 
@@ -117,6 +122,7 @@ try {
   await testConnection();
   await initializeDatabaseTables();
   console.log('All database tables verified/initialized successfully.');
+  startPushNotificationPolling();
   server.listen(PORT, () => {
     console.log(`MTTI Backend server running on port ${PORT}`);
   });

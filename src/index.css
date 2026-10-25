@@ -3,4 +3,72 @@
 @tailwind utilities;
 
 html, body, #root { min-height: 100%; }
-body { @apply bg-gray-50 text-gray-900 antialiased; }
+body { @apply bg-slate-50 text-slate-900 antialiased; }
+
+button, a, input, select, textarea {
+  -webkit-tap-highlight-color: transparent;
+}
+
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="hidden"]),
+select,
+textarea {
+  @apply rounded-xl border-slate-300 bg-white text-sm transition-colors placeholder:text-slate-400;
+}
+
+button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+  @apply outline-none ring-2 ring-blue-500 ring-offset-2;
+}
+
+::selection {
+  @apply bg-blue-100 text-blue-800;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+@page {
+  size: A4 portrait;
+  margin: 12mm;
+}
+
+@media print {
+  body {
+    @apply bg-white text-black;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
+  }
+
+  .app-shell-header, .app-shell-footer, button, [role="alert"], [role="status"], input, select, textarea {
+    display: none !important;
+  }
+
+  main {
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+  }
+
+  main > div {
+    padding: 0 !important;
+  }
+
+  table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    font-size: 9pt !important;
+  }
+
+  thead {
+    display: table-header-group;
+  }
+
+  tr, img, svg {
+    break-inside: avoid;
+  }
+}

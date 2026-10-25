@@ -13,12 +13,14 @@ import { TempIDRequestModel } from '../models/TempIDRequest.js';
 import { ChatMessageModel } from '../models/ChatMessage.js';
 import { CampusCheckinModel } from '../models/CampusCheckin.js';
 import { MinistryReportModel } from '../models/MinistryReport.js';
+import { PushSubscriptionModel } from '../models/PushSubscription.js';
 import { runMigrations } from './migrate.js';
 
 // Creates every table (in dependency order) and applies the schema additions. Safe to run repeatedly.
 export async function initializeDatabaseTables() {
   for (const model of [ClassModel, UserModel, StudentModel, TimetableVersionModel, TimetableSlotModel, SessionModel, AttendanceLogModel,
-    DeviceLockModel, ParentAlertModel, PointsLogModel, BadgeModel, TempIDRequestModel, ChatMessageModel, CampusCheckinModel, MinistryReportModel]) {
+    DeviceLockModel, ParentAlertModel, PointsLogModel, BadgeModel, TempIDRequestModel, ChatMessageModel, CampusCheckinModel, MinistryReportModel,
+    PushSubscriptionModel]) {
     await model.createTable();
   }
   await runMigrations();

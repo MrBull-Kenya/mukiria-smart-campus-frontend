@@ -101,7 +101,7 @@ export default function WeeklySheet({ basePath, classCode = '' }) {
                   })),
                   { key: 'present', label: 'Present' }, { key: 'late', label: 'Late' }, { key: 'absent', label: 'Absent' },
                   { key: 'pct', label: 'Week %', render: (r) => `${r.pct}%` },
-                ]} />
+                ]} pageSize={25} searchable />
                 <p className="text-[11px] text-gray-500">Green tick = present · green tick with amber L = late · red X = absent. "Present" counts on-time and late arrivals.</p>
               </>
             )}

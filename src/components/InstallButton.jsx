@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { Icon } from './ui';
 
 const isStandalone = () => typeof window !== 'undefined' && (window.matchMedia?.('(display-mode: standalone)')?.matches || window.navigator?.standalone === true);
 
@@ -45,8 +46,9 @@ export default function InstallButton() {
   return (
     <div className="relative" ref={box}>
       <button type="button" onClick={click} aria-label="Install the app" aria-expanded={help}
-        className="h-9 flex items-center gap-1.5 px-2.5 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 text-xs font-bold hover:bg-blue-100 transition">
-        <span aria-hidden="true">⬇</span><span className="hidden sm:inline">Install app</span>
+        className="group inline-flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-bold text-slate-700 shadow-sm transition hover:border-blue-300 hover:bg-blue-50 hover:text-blue-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600">
+        <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-blue-50 text-blue-800 transition-colors group-hover:bg-blue-100"><Icon name="install" className="h-4 w-4" /></span>
+        <span className="hidden sm:inline">Install app</span>
       </button>
       {help && (
         <div className="absolute right-0 mt-2 w-72 max-w-[92vw] z-30 bg-white border border-gray-200 rounded-2xl shadow-xl p-4 space-y-2" role="dialog" aria-label="How to install">

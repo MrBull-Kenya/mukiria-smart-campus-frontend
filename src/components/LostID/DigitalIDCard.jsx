@@ -2,7 +2,7 @@ import React from 'react';
 
 export default function DigitalIDCard({ student = { name: "Purity Kainyu", adm: "12154", course: "ITech / Mod IV", classCode: "ITECH6/S/24/J/M/25" } }) {
   return (
-    <div className="bg-gradient-to-br from-blue-900 via-indigo-900 to-slate-900 text-white p-6 rounded-2xl shadow-xl max-w-sm mx-auto space-y-6 relative overflow-hidden border border-blue-800">
+    <div className="bg-gradient-to-br from-blue-700 via-blue-600 to-blue-800 text-white p-6 rounded-2xl shadow-xl max-w-sm mx-auto space-y-6 relative overflow-hidden border border-blue-500">
       <div className="absolute -right-10 -bottom-10 w-40 h-40 bg-blue-500/10 rounded-full blur-2xl pointer-events-none" />
 
       {/* Header */}

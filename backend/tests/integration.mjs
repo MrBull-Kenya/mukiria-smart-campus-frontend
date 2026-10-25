@@ -1,9 +1,18 @@
 // Integration test: boots the REAL Express app on an in-memory SQLite database (see tests/run.sh)
 import path from 'node:path';
+import crypto from 'node:crypto';
 process.env.PORT = '5055'; process.env.CAMPUS_LAT = '-1.123'; process.env.CAMPUS_LNG = '37.123';
+process.env.WEBAUTHN_ORIGINS = 'http://localhost:5055'; process.env.WEBAUTHN_RP_ID = 'localhost';
+const webPush = (await import('web-push')).default;
+const vapidKeys = webPush.generateVAPIDKeys();
+process.env.VAPID_PUBLIC_KEY = vapidKeys.publicKey;
+process.env.VAPID_PRIVATE_KEY = vapidKeys.privateKey;
+process.env.VAPID_SUBJECT = 'mailto:test@mtti.ac.ke';
 const log = console.log; console.log = () => {}; // silence server chatter
 await import('./src/server.js');
 const { default: pool } = await import('./src/config/db.js');
+const { passkeyController } = await import('./src/controllers/passkeyController.js');
+const { pollPushNotifications } = await import('./src/controllers/pushController.js');
 const { generateSecureToken } = await import('./src/utils/qrGenerator.js');
 const bcrypt = (await import('bcryptjs')).default;
 console.log = log;
@@ -13,6 +22,7 @@ for (let i = 0; i < 50; i++) { try { const [r] = await pool.query("SELECT name F
 let adminTok;
 let pass = 0, fail = 0; const failures = [];
 const ok = (name, cond, extra = '') => { if (cond) pass++; else { fail++; failures.push(`${name} ${extra}`); } };
+ok('Railway health endpoint reports backend readiness', (await fetch(`${BASE}/health`)).status === 200);
 const api = async (method, path, { token, body, form, raw, manualPin } = {}) => {
   const headers = {}; if (token) headers.Authorization = `Bearer ${token}`;
   if (manualPin) headers['X-Manual-Attendance-Token'] = manualPin;
@@ -63,9 +73,56 @@ const s2L = await login('1002@mtti.ac.ke', 'Passw0rd!', 'dev-s2'); const s2 = s2
 const s3L = await login('1003@mtti.ac.ke', 'Passw0rd!', 'dev-s3'); const s3 = s3L.data.token;
 const dL = await login('2001@mtti.ac.ke', 'Passw0rd!', 'dev-d'); const sd = dL.data.token;
 ok('student login includes adm_no', s1L.data.user.adm_no === '1001');
+const pushKey = await api('GET', '/push/vapid-public-key', { token: s1 });
+ok('push public key is available to signed-in users', pushKey.status === 200 && pushKey.data.enabled && pushKey.data.publicKey === vapidKeys.publicKey);
+ok('push settings require authentication', (await api('GET', '/push/vapid-public-key')).status === 401);
+const pushSubscription = {
+  endpoint: 'https://fcm.googleapis.com/fcm/send/test-device',
+  keys: { p256dh: 'test-p256dh', auth: 'test-auth' },
+};
+ok('push subscription rejects non-provider endpoints', (await api('POST', '/push/subscriptions', {
+  token: s1,
+  body: { ...pushSubscription, endpoint: 'https://localhost/private' },
+})).status === 400);
+const pushEndpointHash = crypto.createHash('sha256').update(pushSubscription.endpoint).digest('hex');
+ok('device push subscription is stored', (await api('POST', '/push/subscriptions', { token: s1, body: pushSubscription })).status === 201);
+ok('repeat subscription sync preserves the delivery baseline', (await api('POST', '/push/subscriptions', { token: s1, body: pushSubscription })).status === 201 &&
+  (await pool.query('SELECT baseline_complete FROM push_subscriptions WHERE endpoint_hash = ?', [pushEndpointHash]))[0][0].baseline_complete === 1);
+ok('push subscription is scoped to its owner', (await api('DELETE', '/push/subscriptions', { token: s2, body: { endpoint: pushSubscription.endpoint } })).status === 200 &&
+  (await pool.query('SELECT endpoint_hash FROM push_subscriptions WHERE endpoint_hash = ?', [pushEndpointHash]))[0].length === 1);
+ok('device push subscription can be removed', (await api('DELETE', '/push/subscriptions', { token: s1, body: { endpoint: pushSubscription.endpoint } })).status === 200 &&
+  (await pool.query('SELECT endpoint_hash FROM push_subscriptions WHERE endpoint_hash = ?', [pushEndpointHash]))[0].length === 0);
 ok('device mismatch at login blocked', (await login('1001@mtti.ac.ke', 'Passw0rd!', 'other-phone')).status === 403);
 const tL = await login('teacher@mtti.ac.ke', 'Passw0rd!', 'x'); const teach = tL.data.token;
 ok('verify-token requires auth', (await api('GET', '/auth/verify-token')).status === 401 && (await api('GET', '/auth/verify-token', { token: s1 })).status === 200);
+const passkeyConfig = await api('GET', '/auth/passkeys/config');
+ok('passkey configuration endpoint returns a feature flag', passkeyConfig.status === 200 && typeof passkeyConfig.data?.enabled === 'boolean');
+ok('passkey credentials cannot be listed without authentication', (await api('GET', '/auth/passkeys')).status === 401);
+ok('biometric attendance challenge requires authentication', (await api('POST', '/attendance/passkey/options', { body: {} })).status === 401);
+const passkeyOptions = await api('POST', '/auth/passkeys/authentication/options');
+ok('passkey challenge issuance matches server configuration',
+  passkeyConfig.data.enabled
+    ? passkeyOptions.status === 200 && typeof passkeyOptions.data?.options?.challenge === 'string'
+    : passkeyOptions.status === 503);
+ok('passkey credential and challenge tables are initialized',
+  (await pool.query("SELECT name FROM sqlite_master WHERE name IN ('passkey_credentials', 'passkey_challenges')"))[0].length === 2);
+const passkeyRegistrationOptions = await api('POST', '/auth/passkeys/registration/options', { token: s1, body: { current_password: 'Passw0rd!' } });
+ok('passkey enrollment options require an active authenticated user',
+  passkeyConfig.data.enabled
+    ? passkeyRegistrationOptions.status === 200 && typeof passkeyRegistrationOptions.data?.options?.challenge === 'string'
+    : passkeyRegistrationOptions.status === 503);
+const badPasskeyRegistration = await api('POST', '/auth/passkeys/registration/options', { token: s1, body: { current_password: 'incorrect' } });
+ok('passkey enrollment requires the current account password',
+  passkeyConfig.data.enabled ? badPasskeyRegistration.status === 400 : badPasskeyRegistration.status === 503);
+if (passkeyConfig.data.enabled && passkeyOptions.status === 200) {
+  const invalidAssertion = { challenge: passkeyOptions.data.options.challenge, response: { id: 'unknown-credential' } };
+  ok('invalid passkey assertion is rejected', (await api('POST', '/auth/passkeys/authentication/verify', { body: invalidAssertion })).status === 401);
+  ok('passkey challenge cannot be reused', (await api('POST', '/auth/passkeys/authentication/verify', { body: invalidAssertion })).status === 400);
+}
+if (process.env.PASSKEY_TESTS_ONLY === '1') {
+  console.log(JSON.stringify({ pass, fail, failures }, null, 1));
+  process.exit(fail ? 1 : 0);
+}
 ok('profile requires authentication and returns only the signed-in student profile',
   (await api('GET', '/profile')).status === 401 &&
   (await api('GET', '/profile', { token: s1 })).data?.user?.adm_no === '1001' &&
@@ -158,6 +215,62 @@ ok('rep can generate QR outside the campus geofence', remoteQr.status === 200 &&
 const tokRes = await api('POST', '/qr/generate', { token: repT, body: { session_id: sid, venue: 'Lab 1', gps_lat: -1.123, gps_lng: 37.123 } });
 ok('qr signs rep location and returns check-in code', tokRes.status === 200 && tokRes.data.token.includes('.') && /^\d{8}$/.test(tokRes.data.rep_checkin_code) && tokRes.data.payload.qr_lat === -1.123);
 const tok = tokRes.data.token;
+const noPasskeyOptions = await api('POST', '/attendance/passkey/options', { token: s2, body: {
+  session_id: sid, qr_token: tok, gps_lat: -1.123, gps_lng: 37.123, device_id: 'dev-s2',
+} });
+ok('biometric attendance requires an enrolled passkey', noPasskeyOptions.status === 403 && /passkey/i.test(noPasskeyOptions.data?.error));
+
+const attendanceUserIds = new Map([
+  [s1, s1L.data.user.id], [s2, s2L.data.user.id], [s3, s3L.data.user.id],
+  [sd, dL.data.user.id], [repT, repL.data.user.id],
+]);
+for (const userId of attendanceUserIds.values()) {
+  const credentialId = Buffer.from(`integration-passkey-${userId}`).toString('base64url');
+  await pool.query(
+    `INSERT INTO passkey_credentials (credential_hash, credential_id, user_id, public_key, counter, name)
+     VALUES (?, ?, ?, ?, 0, 'Integration passkey')`,
+    [crypto.createHash('sha256').update(credentialId).digest('hex'), credentialId, userId, 'AA==']
+  );
+}
+
+const realVerifyAttendance = passkeyController.verifyAttendance;
+const attendanceChallenge = await api('POST', '/attendance/passkey/options', { token: s1, body: {
+  session_id: sid, qr_token: tok, gps_lat: -1.123, gps_lng: 37.123, device_id: 'dev-s1',
+} });
+const challenge = attendanceChallenge.data.options.challenge;
+const challengeContextMismatch = await realVerifyAttendance({
+  userId: s1L.data.user.id, challenge, response: { id: 'unknown-credential' },
+  sessionId: sid, qrToken: tok, latitude: -1.123, longitude: 37.1231, deviceId: 'dev-s1',
+});
+ok('attendance passkey challenge is bound to exact GPS context', !challengeContextMismatch.ok && challengeContextMismatch.status === 400);
+const invalidAttendanceAssertion = await realVerifyAttendance({
+  userId: s1L.data.user.id, challenge, response: { id: 'unknown-credential' },
+  sessionId: sid, qrToken: tok, latitude: -1.123, longitude: 37.123, deviceId: 'dev-s1',
+});
+ok('unknown attendance passkey is rejected', !invalidAttendanceAssertion.ok && invalidAttendanceAssertion.status === 401);
+const replayedAttendanceAssertion = await realVerifyAttendance({
+  userId: s1L.data.user.id, challenge, response: { id: 'unknown-credential' },
+  sessionId: sid, qrToken: tok, latitude: -1.123, longitude: 37.123, deviceId: 'dev-s1',
+});
+ok('attendance passkey challenge cannot be replayed', !replayedAttendanceAssertion.ok && replayedAttendanceAssertion.status === 400);
+
+// Successful assertions are simulated here; cryptographic passkey validation is covered by the controller checks above.
+passkeyController.verifyAttendance = async ({ userId, challenge: value, response }) => {
+  const [[credential]] = await pool.query(
+    'SELECT credential_hash FROM passkey_credentials WHERE user_id = ? AND credential_id = ?',
+    [userId, response.id]
+  );
+  const [result] = await pool.query(
+    `UPDATE passkey_challenges SET consumed_at = ?
+     WHERE challenge = ? AND user_id = ? AND purpose = 'attendance'
+       AND context_hash IS NOT NULL AND consumed_at IS NULL AND expires_at > ?`,
+    [new Date(), value, userId, new Date()]
+  );
+  return credential && result.affectedRows === 1
+    ? { ok: true }
+    : { ok: false, status: 401, error: 'Test passkey assertion rejected.' };
+};
+
 ok('student cannot generate qr', (await api('POST', '/qr/generate', { token: s1, body: { session_id: sid } })).status === 403);
 ok('rep code verification requires authentication and rep role', (await api('POST', '/qr/rep-code/verify', { body: { code: tokRes.data.rep_checkin_code } })).status === 401 && (await api('POST', '/qr/rep-code/verify', { token: s1, body: { code: tokRes.data.rep_checkin_code } })).status === 403);
 const wrongRepCode = tokRes.data.rep_checkin_code === '00000000' ? '00000001' : '00000000';
@@ -171,11 +284,35 @@ ok('forged qr rejected', (await api('POST', '/qr/verify', { token: s1, body: { t
 ok('garbage qr rejected', (await api('POST', '/qr/verify', { token: s1, body: { token: 'garbage' } })).status === 400);
 
 const photo = () => new Blob([Buffer.from('/9j/4AAQSkZJRg==', 'base64')], { type: 'image/jpeg' });
-const scan = (token, fields, qr = tok) => { const f = new FormData(); Object.entries({ session_id: sid, gps_lat: -1.123, gps_lng: 37.123, qr_token: qr, ...fields }).forEach(([k, v]) => f.append(k, String(v))); f.append('photo', photo(), 'selfie.jpg'); return api('POST', '/attendance/scan', { token, form: f }); };
+const scan = async (token, fields, qr = tok) => {
+  const payload = {
+    session_id: sid, gps_lat: -1.123, gps_lng: 37.123, qr_token: qr, ...fields,
+  };
+  let proof = {};
+  if (String(payload.is_offline_synced) !== 'true') {
+    const options = await api('POST', '/attendance/passkey/options', { token, body: {
+      session_id: payload.session_id, qr_token: payload.qr_token,
+      gps_lat: payload.gps_lat, gps_lng: payload.gps_lng, device_id: payload.device_id,
+    } });
+    if (options.status !== 200) return options;
+    const userId = attendanceUserIds.get(token);
+    const [[credential]] = await pool.query('SELECT credential_id FROM passkey_credentials WHERE user_id = ?', [userId]);
+    proof = {
+      passkey_challenge: options.data.options.challenge,
+      passkey_response: JSON.stringify({ id: credential.credential_id }),
+    };
+  }
+  const f = new FormData();
+  Object.entries({ ...payload, ...proof }).forEach(([k, v]) => f.append(k, String(v)));
+  f.append('photo', photo(), 'selfie.jpg');
+  return api('POST', '/attendance/scan', { token, form: f });
+};
 
 await snap();
 const sc1 = await scan(s1, { adm_no: '1001', device_id: 'dev-s1' });
 ok('student 1 checks in (multipart + photo)', sc1.status === 201 && sc1.data.points_earned === 15 && sc1.data.is_late === false, JSON.stringify(sc1.data));
+const savedDistance = (await pool.query('SELECT rep_distance_m FROM attendance_logs WHERE session_id = ? AND adm_no = ?', [sid, '1001']))[0][0];
+ok('representative distance is returned and persisted', sc1.data.rep_distance_m === 0 && Number(savedDistance.rep_distance_m) === 0);
 ok('duplicate scan blocked (409)', (await scan(s1, { adm_no: '1001', device_id: 'dev-s1' })).status === 409);
 ok('outside geofence blocked', (await scan(s2, { adm_no: '1002', device_id: 'dev-s2', gps_lat: 0.0, gps_lng: 37.0 })).status === 403);
 ok('wrong device blocked', (await scan(s2, { adm_no: '1002', device_id: 'stolen-phone' })).status === 403);
@@ -185,9 +322,15 @@ ok('check-in blocked beyond 20 m from rep device', (await scan(s2, { adm_no: '10
 ok('forged qr cannot check in', (await scan(s2, { adm_no: '1002', device_id: 'dev-s2' }, forged)).status === 400);
 const realNow = Date.now; Date.now = () => realNow() - 120000; const stale = generateSecureToken('ITECH6', '1000', 'Lab 1', sid, { latitude: -1.123, longitude: 37.123 }).token; Date.now = realNow;
 ok('stale qr rejected online', (await scan(s2, { adm_no: '1002', device_id: 'dev-s2' }, stale)).status === 400);
-const off = await scan(s2, { adm_no: '1002', device_id: 'dev-s2', is_offline_synced: true, scanned_at: Date.now() - 60000 }, stale);
-ok('offline-queued scan accepted on sync', off.status === 201, JSON.stringify(off.data));
+const off = await scan(s2, { adm_no: '1002', device_id: 'dev-s2', is_offline_synced: true }, stale);
+ok('offline-queued scan is rejected without biometric verification', off.status === 403 && /offline/i.test(off.data?.error), JSON.stringify(off.data));
+const sc2 = await scan(s2, { adm_no: '1002', device_id: 'dev-s2' });
+ok('student 2 checks in online after the offline scan is rejected', sc2.status === 201 && sc2.data.is_late === false, JSON.stringify(sc2.data));
 ok('unauthenticated scan rejected', (await api('POST', '/attendance/scan', { form: new FormData() })).status === 401);
+if (process.env.ATTENDANCE_TESTS_ONLY === '1') {
+  console.log(JSON.stringify({ pass, fail, failures }, null, 1));
+  process.exit(fail ? 1 : 0);
+}
 
 // ---------- 4. student area ----------
 const dash = await api('GET', '/student/dashboard', { token: s1 });
@@ -221,7 +364,7 @@ await snap();
 const rd = await api('GET', '/classrep/dashboard', { token: repT });
 ok('rep dashboard stats', rd.data?.totalStudents === 4 && rd.data.presentToday === 2 && rd.data.absentToday === 2 && rd.data.activeSession?.unit === 'Networking', JSON.stringify(rd.data));
 const live = await api('GET', '/classrep/live-logs', { token: repT });
-ok('live logs', live.data?.logs?.length === 2 && live.data.session.unit === 'Networking' && live.data.logs.some(l => l.offline), JSON.stringify(live.data));
+ok('live logs show both online biometric check-ins', live.data?.logs?.length === 2 && live.data.session.unit === 'Networking' && live.data.logs.every((l) => !l.offline) && live.data.logs.some((l) => l.adm === '1001') && live.data.logs.some((l) => l.adm === '1002'), JSON.stringify(live.data));
 const mem = await api('GET', '/classrep/members', { token: repT });
 ok('members list (class only)', mem.data?.length === 4 && mem.data.every(m => m.adm !== '2001'));
 const add = await api('POST', '/classrep/members', { token: repT, body: { adm_no: '1004', name: 'Eve', email: '1004@mtti.ac.ke', password: 'StudentPass1!', parent_email: 'pe@mail.com' } });
@@ -292,7 +435,25 @@ ok('final report numbers add up', fr.data?.totalStudents === fr.data.eligible + 
 ok('lost-id logs', (await api('GET', '/hod/lost-id-logs', { token: hod })).data?.[0]?.name === 'Carol');
 const tvs = await api('GET', '/hod/timetables', { token: hod });
 ok('hod sees pending timetable', tvs.data?.[0]?.status === 'pending' && tvs.data[0].slots === 2);
-ok('hod approves timetable', (await api('POST', `/hod/timetables/${tvs.data[0].id}/decision`, { token: hod, body: { decision: 'approved', comment: 'ok' } })).status === 200 && (await api('GET', '/classrep/timetable', { token: repT })).data.version.status === 'approved');
+const timetablePushEndpoint = 'https://fcm.googleapis.com/fcm/send/timetable';
+const timetablePushHash = crypto.createHash('sha256').update(timetablePushEndpoint).digest('hex');
+await api('POST', '/push/subscriptions', { token: s1, body: { endpoint: timetablePushEndpoint, keys: { p256dh: 'test-key', auth: 'test-auth' } } });
+const deliveredPushes = [];
+const originalSendNotification = webPush.sendNotification;
+webPush.sendNotification = async (subscription, payload) => deliveredPushes.push({ subscription, payload: JSON.parse(payload) });
+const timetableApproval = await api('POST', `/hod/timetables/${tvs.data[0].id}/decision`, { token: hod, body: { decision: 'approved', comment: 'ok' } });
+await pollPushNotifications();
+ok('hod approves timetable', timetableApproval.status === 200 && (await api('GET', '/classrep/timetable', { token: repT })).data.version.status === 'approved');
+ok('approved timetable sends push to subscribed class members', deliveredPushes.length === 1 &&
+  deliveredPushes[0].subscription.endpoint === timetablePushEndpoint &&
+  deliveredPushes[0].payload.url === '/student/timetable' &&
+  deliveredPushes[0].payload.title === 'Class timetable updated');
+await api('POST', `/hod/timetables/${tvs.data[0].id}/decision`, { token: hod, body: { decision: 'approved', comment: 'ok' } });
+await pollPushNotifications();
+ok('re-approving the same timetable does not send duplicate push', deliveredPushes.length === 1);
+webPush.sendNotification = originalSendNotification;
+await api('DELETE', '/push/subscriptions', { token: s1, body: { endpoint: timetablePushEndpoint } });
+ok('test push subscription removed after delivery test', (await pool.query('SELECT endpoint_hash FROM push_subscriptions WHERE endpoint_hash = ?', [timetablePushHash]))[0].length === 0);
 const studentTimetable = await api('GET', '/student/timetable', { token: s1 });
 ok('student sees approved timetable and ordered lessons', studentTimetable.data?.version?.status === 'approved' && studentTimetable.data.version.id === tvs.data[0].id && studentTimetable.data.slots[0].day === 'Monday' && studentTimetable.data.slots.length === 2);
 ok('student only sees timetable for own class', (await api('GET', '/student/timetable', { token: sd })).data?.version === null);
@@ -308,6 +469,7 @@ ok('Ministry report filters its saved snapshot to the selected department and cl
 ok('Ministry report rejects a class outside the chosen department', (await api('POST', '/hod/ministry-audit', { token: hod, body: { department: 'Computing & Informatics', class_code: 'ITECH7' } })).status === 400);
 ok('legacy /ministry/reports now protected', (await api('GET', '/ministry/reports', { token: s1 })).status === 403);
 ok('hod resets device', (await api('POST', '/hod/students/1001/reset-device', { token: hod })).status === 200);
+ok('student can re-register the cleared device by signing in again', (await login('1001@mtti.ac.ke', 'Passw0rd!', 'dev-s1')).status === 200);
 ok('hod sets fees', (await api('PUT', '/hod/fees/1001', { token: hod, body: { total_fees: 50000, paid_amount: 30000 } })).status === 200);
 ok('fees validation', (await api('PUT', '/hod/fees/1001', { token: hod, body: { total_fees: 'x', paid_amount: 1 } })).status === 400);
 

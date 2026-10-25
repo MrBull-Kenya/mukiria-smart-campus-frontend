@@ -1,11 +1,11 @@
 import React from 'react';
 import { useFetch } from '../../hooks/useFetch';
-import { Page, Async, Stat, Table, Btn } from '../../components/ui';
+import { Page, Async, Stat, Table, Btn, Icon } from '../../components/ui';
 
 export default function FinalReports() {
   const state = useFetch('/hod/final-reports');
   return (
-    <Page title="Final attendance report" subtitle={state.data ? `As of ${state.data.generatedOn}` : ''} actions={<Btn variant="ghost" onClick={() => window.print()}>🖨 Print</Btn>}>
+    <Page title="Final attendance report" subtitle={state.data ? `As of ${state.data.generatedOn}` : ''} actions={<Btn variant="ghost" onClick={() => window.print()}><span className="inline-flex items-center gap-2"><Icon name="printer" className="h-4 w-4" />Print report</span></Btn>}>
       <Async state={state}>
         {(d) => (
           <>

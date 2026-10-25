@@ -1,28 +1,27 @@
 import React, { useState } from 'react';
+import { startAuthentication } from '@simplewebauthn/browser';
 import { useAuth } from '../../context/AuthContext';
 import { getCurrentPosition, distanceFromCampus } from '../../services/geolocation';
-import { submitScan } from '../../services/attendance';
-import { saveScanOffline } from '../../services/offlineDB';
+import { getAttendancePasskeyOptions, submitScan } from '../../services/attendance';
 import { getErrorMessage } from '../../services/api';
 import { CAMPUS } from '../../config/campus';
 
 /**
- * Submit a verified QR check-in with the device's current GPS location.
- * If offline, queue the scan for upload when a connection returns.
+ * Submit a verified QR check-in with an online passkey assertion and current GPS location.
  */
 export default function SubmitQrCheckin({ sessionId, qrToken, admNo, onComplete, onCancel }) {
   const { deviceId } = useAuth();
   const [busy, setBusy] = useState(false);
-  const [note, setNote] = useState({ kind: 'info', text: 'The QR code is ready. Confirm to check in using this device’s location.' });
-
-  const queueOffline = async (fields) => {
-    await saveScanOffline({ fields });
-    onComplete({ queued: true });
-  };
+  const [note, setNote] = useState({ kind: 'info', text: 'Check in online using your enrolled passkey and this device’s location.' });
 
   const handleCheckin = async () => {
     if (busy) return;
     setBusy(true);
+    if (!navigator.onLine) {
+      setNote({ kind: 'error', text: 'Biometric attendance requires an internet connection. Reconnect and scan the current QR code.' });
+      setBusy(false);
+      return;
+    }
     setNote({ kind: 'info', text: 'Reading your location…' });
 
     let pos;
@@ -40,25 +39,29 @@ export default function SubmitQrCheckin({ sessionId, qrToken, admNo, onComplete,
       gps_lat: pos.latitude,
       gps_lng: pos.longitude,
       device_id: deviceId,
-      qr_token: qrToken, // the server verifies the signature (and freshness, except for offline replays)
-      scanned_at: Date.now(), // used only when this scan is queued offline and uploaded later
+      qr_token: qrToken,
     };
 
-    if (!navigator.onLine) {
-      await queueOffline(fields);
-      return;
-    }
-
-    setNote({ kind: 'info', text: 'Uploading check-in…' });
     try {
-      const res = await submitScan(fields);
-      onComplete({ queued: false, ...res.data });
-    } catch (err) {
-      if (err.isNetworkError) {
-        await queueOffline(fields);
+      setNote({ kind: 'info', text: 'Preparing secure biometric verification…' });
+      const { data: challengeData } = await getAttendancePasskeyOptions(fields);
+      setNote({ kind: 'info', text: 'Confirm your identity with your device passkey…' });
+      const passkeyResponse = await startAuthentication({ optionsJSON: challengeData.options });
+      if (!navigator.onLine) {
+        setNote({ kind: 'error', text: 'You went offline before verification completed. No check-in was recorded. Reconnect and scan the current QR again.' });
+        setBusy(false);
         return;
       }
-      let text = getErrorMessage(err, 'Check-in failed.');
+      const res = await submitScan({
+        ...fields,
+        passkey_challenge: challengeData.options.challenge,
+        passkey_response: passkeyResponse,
+      });
+      onComplete(res.data);
+    } catch (err) {
+      let text = err?.name === 'NotAllowedError'
+        ? 'Passkey verification was cancelled or timed out. Scan the current QR and try again.'
+        : getErrorMessage(err, 'Check-in failed.');
       if (err.response?.status === 403 && /perimeter|geofence/i.test(text)) {
         text += ` (Your phone puts you ${distanceFromCampus(pos.latitude, pos.longitude)} m from the campus centre; limit is ${CAMPUS.radiusMeters} m.)`;
       }

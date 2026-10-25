@@ -6,6 +6,7 @@ import AuthLayout from './components/layout/AuthLayout';
 import AppLayout from './components/layout/AppLayout';
 import { ACCESS } from './config/navigation';
 import { ROLE_HOME } from './config/campus';
+import { Spinner } from './components/ui';
 
 // Pages are code-split so a student on a weak connection doesn't download the HOD screens.
 const page = (loader) => lazy(loader);
@@ -75,9 +76,7 @@ const FeesClearance = page(() => import('./pages/campus/FeesClearance'));
 const Profile = page(() => import('./pages/Profile'));
 
 const Fallback = () => (
-  <div className="flex items-center justify-center p-16">
-    <div className="w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
-  </div>
+  <Spinner label="Loading your workspace" className="min-h-[60vh] items-center" />
 );
 
 function Unauthorized() {

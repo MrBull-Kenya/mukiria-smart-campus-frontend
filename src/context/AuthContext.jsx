@@ -1,4 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { startAuthentication } from '@simplewebauthn/browser';
 import { STORAGE_KEYS } from '../config/campus';
 import api from '../services/api';
 import { getDeviceId } from '../services/deviceFingerprint';
@@ -56,6 +57,26 @@ export function AuthProvider({ children }) {
     }
   }, []);
 
+  const loginWithPasskey = useCallback(async () => {
+    try {
+      const { data: challengeData } = await api.post('/auth/passkeys/authentication/options');
+      const response = await startAuthentication({ optionsJSON: challengeData.options });
+      const { data } = await api.post('/auth/passkeys/authentication/verify', {
+        challenge: challengeData.options.challenge,
+        response,
+        device_id: getDeviceId(),
+      });
+      cache(data.token, data.user);
+      setSession({ token: data.token, user: data.user });
+      return data.user;
+    } catch (err) {
+      if (err?.name === 'NotAllowedError') {
+        throw new Error('Passkey sign-in was cancelled or timed out. Please try again.');
+      }
+      throw new Error(apiErrorMessage(err, 'Could not sign in with your passkey.'));
+    }
+  }, []);
+
   // The backend owns the session and clears cached credentials when a JWT expires or is revoked.
   useEffect(() => {
     const handleUnauthorized = () => {
@@ -81,9 +102,10 @@ export function AuthProvider({ children }) {
     deviceId: getDeviceId(),
     isAuthenticated: !!session.token && !!session.user,
     login,
+    loginWithPasskey,
     logout,
     updateUser,
-  }), [session, login, logout, updateUser]);
+  }), [session, login, loginWithPasskey, logout, updateUser]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

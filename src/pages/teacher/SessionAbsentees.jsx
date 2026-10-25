@@ -28,7 +28,7 @@ export default function SessionAbsentees() {
               <select
                 value={selectedId}
                 onChange={(event) => setSelectedId(event.target.value)}
-                className="w-full rounded-xl border border-gray-300 bg-gray-50 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none"
+                className="w-full px-3 py-2.5 focus:border-blue-600 focus:ring-2 focus:ring-blue-100"
               >
                 {rows.map((session) => (
                   <option key={session.id} value={session.id}>
@@ -41,7 +41,7 @@ export default function SessionAbsentees() {
               {(data) => (
                 <>
                   <div className="grid grid-cols-2 gap-3">
-                    <Stat label="Present" value={`${data.present} / ${data.total}`} tone="green" hint={`${data.session.unit} · ${data.session.classCode}`} />
+                    <Stat label="Present" value={`${data.present} / ${data.total}`} tone="green" hint={`${data.session.unit} · ${data.session.classCode}`} progress={data.total > 0 ? (data.present / data.total) * 100 : 0} />
                     <Stat label="Absent" value={data.absent.length} tone={data.absent.length ? 'red' : 'green'} hint={`${data.session.date} · ${data.session.time}`} />
                   </div>
                   {data.absent.length === 0 ? (

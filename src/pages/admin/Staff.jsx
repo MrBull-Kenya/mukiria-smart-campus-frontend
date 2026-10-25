@@ -61,13 +61,13 @@ export default function AdminStaff() {
             <>
               <Card className="flex flex-wrap items-end gap-3">
                 <label className="block w-full max-w-sm">
-                  <span className="mb-1 block text-xs font-bold text-gray-700">Filter staff by department</span>
-                  <select value={departmentFilter} onChange={(event) => setDepartmentFilter(event.target.value)} className="w-full rounded-xl border border-gray-300 bg-gray-50 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none">
+                  <span className="mb-1.5 block text-xs font-bold text-slate-700">Filter staff by department</span>
+                  <select value={departmentFilter} onChange={(event) => setDepartmentFilter(event.target.value)} className="w-full px-3 py-2.5 focus:border-blue-600 focus:ring-2 focus:ring-blue-100">
                     <option value="">All departments</option>
                     {departments.map((department) => <option key={department} value={department}>{department}</option>)}
                   </select>
                 </label>
-                <span className="pb-2 text-xs text-gray-500">{filteredRows.length} of {rows.length} staff</span>
+                <span aria-live="polite" className="pb-2 text-xs font-medium text-slate-500">{filteredRows.length} of {rows.length} staff</span>
               </Card>
               {pending.length > 0 && (
                 <>
@@ -76,23 +76,23 @@ export default function AdminStaff() {
                     { key: 'name', label: 'Name' }, { key: 'email', label: 'Email' }, { key: 'role', label: 'Role', render: (r) => ROLE_LABEL[r.role] },
                     { key: 'department', label: 'Department', render: (r) => ['hod', 'teacher'].includes(r.role) ? r.department || '—' : '—' },
                     { key: 'a', label: '', render: (r) => <div className="flex gap-2"><Btn variant="ok" onClick={() => decide(r.id, 'approve')}>Approve</Btn><Btn variant="ghost" onClick={() => decide(r.id, 'reject')}>Reject</Btn></div> },
-                  ]} />
+                  ]} pageSize={10} searchable />
                 </>
               )}
 
               <Card className="max-w-xl">
                 <form onSubmit={add} className="space-y-3">
-                  <p className="text-sm font-bold text-gray-800">Add a staff member (active immediately)</p>
-                  <label className="block"><span className="block text-xs font-bold text-gray-700 mb-1">Role</span>
-                    <select value={f.role} onChange={(e) => setF((x) => ({ ...x, role: e.target.value, department: '', is_class_teacher: false, class_code: '' }))} className="w-full bg-gray-50 border border-gray-300 rounded-xl px-3 py-2.5 text-sm">
+                  <p className="text-sm font-bold text-blue-800">Add a staff member (active immediately)</p>
+                  <label className="block"><span className="mb-1.5 block text-xs font-bold text-slate-700">Role</span>
+                    <select value={f.role} onChange={(e) => setF((x) => ({ ...x, role: e.target.value, department: '', is_class_teacher: false, class_code: '' }))} className="w-full px-3 py-2.5 focus:border-blue-600 focus:ring-2 focus:ring-blue-100">
                       <option value="teacher">Teacher</option><option value="hod">Head of Department (HOD)</option><option value="admin">Administrator</option>
                     </select></label>
                   <Input label="Full name" required value={f.name} onChange={set('name')} placeholder={f.role === 'teacher' ? "Exactly as class reps will pick it, e.g. Mr. Otieno" : ''} />
                   <Input label="Email" type="email" required value={f.email} onChange={set('email')} />
                   {['hod', 'teacher'].includes(f.role) && (
                     <label className="block">
-                      <span className="block text-xs font-bold text-gray-700 mb-1">Department</span>
-                      <select required value={f.department} onChange={set('department')} className="w-full bg-gray-50 border border-gray-300 rounded-xl px-3 py-2.5 text-sm">
+                      <span className="mb-1.5 block text-xs font-bold text-slate-700">Department</span>
+                      <select required value={f.department} onChange={set('department')} className="w-full px-3 py-2.5 focus:border-blue-600 focus:ring-2 focus:ring-blue-100">
                         <option value="">Choose a department</option>
                         {DEPARTMENTS.map((department) => <option key={department} value={department}>{department}</option>)}
                       </select>
@@ -107,8 +107,8 @@ export default function AdminStaff() {
                       </label>
                       {f.is_class_teacher && (
                         <label className="block">
-                          <span className="block text-xs font-bold text-gray-700 mb-1">Class to assign</span>
-                          <select required value={f.class_code} onChange={set('class_code')} disabled={classesState.loading || !classesState.data} className="w-full bg-gray-50 border border-gray-300 rounded-xl px-3 py-2.5 text-sm disabled:opacity-60">
+                          <span className="mb-1.5 block text-xs font-bold text-slate-700">Class to assign</span>
+                          <select required value={f.class_code} onChange={set('class_code')} disabled={classesState.loading || !classesState.data} className="w-full px-3 py-2.5 focus:border-blue-600 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:opacity-60">
                             <option value="">{classesState.loading ? 'Loading classes…' : 'Choose an unassigned class'}</option>
                             {(classesState.data || []).filter((c) => !c.classTeacherId).map((c) => <option key={c.code} value={c.code}>{c.code}</option>)}
                           </select>
@@ -130,15 +130,15 @@ export default function AdminStaff() {
                 <Card className="max-w-xl">
                   <form onSubmit={saveEdit} className="space-y-3">
                     <div>
-                      <h2 className="text-sm font-bold text-gray-800">Edit staff details</h2>
+                      <h2 className="text-sm font-bold text-blue-800">Edit staff details</h2>
                       <p className="text-xs text-gray-500">{ROLE_LABEL[editingStaff.role]} · account role cannot be changed here.</p>
                     </div>
                     <Input label="Full name" required maxLength={150} value={editForm.name} onChange={(event) => setEditForm((current) => ({ ...current, name: event.target.value }))} />
                     <Input label="Email" type="email" required value={editForm.email} onChange={(event) => setEditForm((current) => ({ ...current, email: event.target.value }))} />
                     {['teacher', 'hod'].includes(editingStaff.role) && (
                       <label className="block">
-                        <span className="mb-1 block text-xs font-bold text-gray-700">Department</span>
-                        <select value={editForm.department} onChange={(event) => setEditForm((current) => ({ ...current, department: event.target.value }))} className="w-full rounded-xl border border-gray-300 bg-gray-50 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none">
+                        <span className="mb-1.5 block text-xs font-bold text-slate-700">Department</span>
+                        <select value={editForm.department} onChange={(event) => setEditForm((current) => ({ ...current, department: event.target.value }))} className="w-full px-3 py-2.5 focus:border-blue-600 focus:ring-2 focus:ring-blue-100">
                           <option value="">Choose a department</option>
                           {DEPARTMENTS.map((department) => <option key={department} value={department}>{department}</option>)}
                         </select>
@@ -148,8 +148,8 @@ export default function AdminStaff() {
                       <>
                         <Input label="Unit / Subject taught" maxLength={150} value={editForm.teacher_unit} onChange={(event) => setEditForm((current) => ({ ...current, teacher_unit: event.target.value }))} />
                         <label className="block">
-                          <span className="mb-1 block text-xs font-bold text-gray-700">Class teacher assignment</span>
-                          <select value={editForm.class_code} onChange={(event) => setEditForm((current) => ({ ...current, class_code: event.target.value }))} disabled={classesState.loading || !classesState.data} className="w-full rounded-xl border border-gray-300 bg-gray-50 px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none disabled:opacity-60">
+                          <span className="mb-1.5 block text-xs font-bold text-slate-700">Class teacher assignment</span>
+                          <select value={editForm.class_code} onChange={(event) => setEditForm((current) => ({ ...current, class_code: event.target.value }))} disabled={classesState.loading || !classesState.data} className="w-full px-3 py-2.5 focus:border-blue-600 focus:ring-2 focus:ring-blue-100 disabled:cursor-not-allowed disabled:opacity-60">
                             <option value="">Not a class teacher</option>
                             {(classesState.data || []).filter((item) => !item.classTeacherId || Number(item.classTeacherId) === Number(editingStaff.id)).map((item) => <option key={item.code} value={item.code}>{item.code}</option>)}
                           </select>
@@ -182,7 +182,7 @@ export default function AdminStaff() {
                     {!r.isMe && <button onClick={() => resetPassword(r)} className="text-gray-500 underline">Set password</button>}
                   </div>
                 ) },
-              ]} />
+              ]} pageSize={25} searchable />
             </>
           );
         }}

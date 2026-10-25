@@ -38,14 +38,17 @@ export default function ScanAttendance() {
       return;
     }
 
-    // Online: let the server confirm the code is genuine and still fresh (30 s window).
-    // Offline: we can't ask, so queue the scan and let the server judge it when it syncs.
-    if (navigator.onLine) {
-      try {
-        await verifyQrToken(text.trim());
-      } catch (err) {
-        if (!err.isNetworkError) { setError(getErrorMessage(err, 'QR code rejected.')); setStep('idle'); return; }
-      }
+    if (!navigator.onLine) {
+      setError('Biometric attendance requires an internet connection. Reconnect and scan the current QR code.');
+      setStep('idle');
+      return;
+    }
+    try {
+      await verifyQrToken(text.trim());
+    } catch (err) {
+      setError(getErrorMessage(err, 'QR code rejected.'));
+      setStep('idle');
+      return;
     }
     setSession({ ...parsed.payload, token: text.trim() });
     setStep('checkin');
@@ -71,7 +74,7 @@ export default function ScanAttendance() {
       <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-xl space-y-4">
         <div className="text-center space-y-1">
           <h2 className="text-xl font-black text-gray-900">Secure Attendance Check-in</h2>
-          <p className="text-xs text-gray-500">Scan the class QR code, then confirm check-in using your device’s location.</p>
+          <p className="text-xs text-gray-500">Scan the class QR code, then verify with your enrolled passkey and device location while online.</p>
         </div>
 
         {error && <div className="p-3 bg-amber-50 border border-amber-200 text-amber-800 text-xs rounded-xl font-medium">{error}</div>}
@@ -87,17 +90,11 @@ export default function ScanAttendance() {
         )}
 
         {step === 'done' && result && (
-          <div className={`p-5 rounded-xl space-y-1 text-center border ${result.queued ? 'bg-amber-50 border-amber-200 text-amber-800' : 'bg-emerald-50 border-emerald-200 text-emerald-800'}`}>
-            {result.queued ? (
-              <>
-                <h4 className="text-sm font-bold">Saved offline</h4>
-                <p className="text-xs">Your check-in is stored on this phone and will upload automatically when you're back online.</p>
-              </>
-            ) : (
-              <>
-                <h4 className="text-sm font-bold">✓ Check-in confirmed{result.is_late ? ' (late)' : ''}</h4>
-                <p className="text-xs">+{result.points_earned} punctuality points</p>
-              </>
+          <div className="p-5 rounded-xl space-y-1 text-center border bg-emerald-50 border-emerald-200 text-emerald-800">
+            <h4 className="text-sm font-bold">✓ Check-in confirmed{result.is_late ? ' (late)' : ''}</h4>
+            <p className="text-xs">+{result.points_earned} punctuality points</p>
+            {Number.isFinite(Number(result.rep_distance_m)) && (
+              <p className="text-xs mt-2">Estimated distance from the class representative: {result.rep_distance_m} m (GPS estimate).</p>
             )}
           </div>
         )}

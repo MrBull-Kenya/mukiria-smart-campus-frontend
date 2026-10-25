@@ -4,6 +4,9 @@
   "type": "module",
   "description": "Mukiria Technical Training Institute Smart Campus Backend",
   "main": "src/server.js",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
@@ -11,6 +14,7 @@
     "create-user": "node scripts/create-user.mjs"
   },
   "dependencies": {
+    "@simplewebauthn/server": "^14.0.3",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
@@ -20,7 +24,8 @@
     "mysql2": "^3.9.7",
     "nodemailer": "^10.0.13",
     "pdfkit": "^0.15.0",
-    "socket.io": "^4.7.5"
+    "socket.io": "^4.7.5",
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
     "nodemon": "^3.1.14"
