@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import multer from 'multer';
 import pool from '../config/db.js';
 import { TIMETABLE_DIR, UPLOAD_DIR } from '../config/storage.js';
-import { q, one, exec, sqlDate, startOfToday, asDate, fmtDate, fmtTime, pct1, ATTENDANCE_THRESHOLD } from '../utils/dbHelpers.js';
+import { q, one, exec, sqlDate, sqlUtcDate, startOfToday, asDate, asUtcDate, eatDateParts, fmtDate, fmtTime, fmtEATDate, fmtEATTime, pct1, ATTENDANCE_THRESHOLD } from '../utils/dbHelpers.js';
 import { awardBadges, POINTS_LATE, POINTS_ON_TIME, recomputeAttendance, recomputeClassAttendance } from './attendanceController.js';
 import { sendEmail, emailTemplates, emailSettings, isEmailConfigured, missingEmailSettings, describeEmailError } from '../config/email.js';
 import { allow } from '../utils/rateLimit.js';
@@ -92,7 +92,7 @@ async function activeSessionForClass(cc) {
   );
   return session ? {
     id: session.id, unit: session.unit_name, lecturer: session.lecturer_name,
-    venue: session.venue || '', startedAt: fmtTime(session.start_time), checkedIn: Number(session.checked_in),
+    venue: session.venue || '', startedAt: fmtEATTime(session.start_time), checkedIn: Number(session.checked_in),
   } : null;
 }
 
@@ -133,9 +133,9 @@ async function startClassSession(classCode, body, actingAssignment) {
     }
     const [insert] = await connection.query(
       'INSERT INTO sessions (class_code, unit_name, lecturer_name, start_time, end_time, late_threshold_mins, is_active, venue) VALUES (?, ?, ?, ?, ?, ?, 1, ?)',
-      [classCode, unit_name.trim(), lecturer_name.trim(), sqlDate(startedAt), sqlDate(new Date(startedAt.getTime() + 3 * 3600 * 1000)), Number(late_threshold_mins) || 15, venue || null]
+      [classCode, unit_name.trim(), lecturer_name.trim(), sqlUtcDate(startedAt), sqlUtcDate(new Date(startedAt.getTime() + 3 * 3600 * 1000)), Number(late_threshold_mins) || 15, venue || null]
     );
-    result = { id: insert.insertId, class_code: classCode, unit_name: unit_name.trim(), lecturer_name: lecturer_name.trim(), venue: venue || null };
+    result = { id: insert.insertId, class_code: classCode, unit_name: unit_name.trim(), lecturer_name: lecturer_name.trim(), venue: venue || null, startedAt: fmtEATTime(startedAt) };
     if (actingAssignment) {
       const [bound] = await connection.query(
         `UPDATE acting_rep_assignments SET session_id = ?
@@ -300,7 +300,7 @@ export const student = {
       : null;
     res.json({
       assignment: assignment ? { id: assignment.id, expiresAt: `${fmtDate(assignment.expires_at)} ${fmtTime(assignment.expires_at)} EAT` } : null,
-      session: session ? { id: session.id, unit_name: session.unit_name, lecturer_name: session.lecturer_name, venue: session.venue || '', startedAt: fmtTime(session.start_time) } : null,
+      session: session ? { id: session.id, unit_name: session.unit_name, lecturer_name: session.lecturer_name, venue: session.venue || '', startedAt: fmtEATTime(session.start_time) } : null,
     });
   }),
   actingRepSessionStart: wrap(async (req, res) => {
@@ -322,10 +322,10 @@ export const student = {
     const session = await one('SELECT id FROM sessions WHERE id = ? AND class_code = ? AND is_active = 1', [assignment.session_id, req.user.class_code]);
     if (!session) return bad(res, 'There is no active session to end.', 409);
     const endedAt = new Date();
-    const endedAtSql = sqlDate(endedAt);
+    const endedAtSql = sqlUtcDate(endedAt);
     const result = await exec('UPDATE sessions SET is_active = 0, end_time = ?, ended_at = ? WHERE id = ? AND class_code = ? AND is_active = 1', [endedAtSql, endedAtSql, session.id, req.user.class_code]);
     if (!result.affectedRows) return bad(res, 'This session has already ended.', 409);
-    res.json({ message: 'Session ended.', endedAt: fmtTime(endedAt) });
+    res.json({ message: 'Session ended.', endedAt: fmtEATTime(endedAt) });
   }),
   timetable: wrap(async (req, res) => {
     const v = await one("SELECT * FROM timetable_versions WHERE class_code = ? AND status = 'approved' ORDER BY id DESC LIMIT 1", [req.user.class_code]);
@@ -363,7 +363,7 @@ export const student = {
        FROM sessions s LEFT JOIN attendance_logs l ON l.session_id = s.id AND l.adm_no = ?
        WHERE s.class_code = ? ORDER BY s.start_time DESC, s.id DESC LIMIT 60`, [st.adm_no, st.class_code]);
     res.json(rows.map((r) => ({
-      id: r.id, date: fmtDate(r.start_time), unit: r.unit_name,
+      id: r.id, date: fmtEATDate(r.start_time), unit: r.unit_name,
       time: r.log_id ? fmtTime(r.scanned) : '—', status: r.log_id ? (r.is_late ? 'Late' : 'Present') : 'Absent',
     })));
   }),
@@ -503,7 +503,7 @@ export const rep = {
   }),
   sessionCurrent: wrap(async (req, res) => {
     const s = await one('SELECT * FROM sessions WHERE class_code = ? AND is_active = 1 ORDER BY id DESC LIMIT 1', [classOf(req)]);
-    res.json({ session: s ? { id: s.id, unit_name: s.unit_name, lecturer_name: s.lecturer_name, venue: s.venue, startedAt: fmtTime(s.start_time) } : null });
+    res.json({ session: s ? { id: s.id, unit_name: s.unit_name, lecturer_name: s.lecturer_name, venue: s.venue, startedAt: fmtEATTime(s.start_time) } : null });
   }),
   manualAttendanceList: wrap(async (req, res) => {
     const cc = classOf(req);
@@ -517,7 +517,7 @@ export const rep = {
        WHERE u.class_code = ? AND u.role = 'student' AND u.status = 'active'
        ORDER BY u.name, s.adm_no`, [session.id, cc]);
     res.json({
-      session: { id: session.id, unit: session.unit_name, startedAt: fmtTime(session.start_time) },
+      session: { id: session.id, unit: session.unit_name, startedAt: fmtEATTime(session.start_time) },
       students: students.map((student) => ({
         adm: student.adm_no, name: student.name, present: !!student.attendance_id,
         time: student.attendance_time ? fmtTime(student.attendance_time) : null,
@@ -599,7 +599,7 @@ export const rep = {
     }
 
     const now = new Date();
-    const isLate = (now - asDate(session.start_time)) / 60000 > (session.late_threshold_mins || 15);
+    const isLate = (now - asUtcDate(session.start_time)) / 60000 > (session.late_threshold_mins || 15);
     const points = isLate ? POINTS_LATE : POINTS_ON_TIME;
     let log;
     try {
@@ -622,10 +622,10 @@ export const rep = {
   }),
   sessionEnd: wrap(async (req, res) => {
     const endedAt = new Date();
-    const endedAtSql = sqlDate(endedAt);
+    const endedAtSql = sqlUtcDate(endedAt);
     const result = await exec('UPDATE sessions SET is_active = 0, end_time = ?, ended_at = ? WHERE class_code = ? AND is_active = 1', [endedAtSql, endedAtSql, classOf(req)]);
     if (!result.affectedRows) return bad(res, 'There is no active session to end.', 409);
-    res.json({ message: 'Session ended.', endedAt: fmtTime(endedAt) });
+    res.json({ message: 'Session ended.', endedAt: fmtEATTime(endedAt) });
   }),
 
   dashboard: wrap(async (req, res) => {
@@ -654,7 +654,7 @@ export const rep = {
        JOIN students st ON st.adm_no = l.adm_no JOIN users u ON u.id = st.user_id
        LEFT JOIN users marked_by ON marked_by.id = l.recorded_by WHERE l.session_id = ? ORDER BY l.id DESC`, [session.id]);
     res.json({
-      session: { id: session.id, unit: session.unit_name, active: !!session.is_active, startedAt: fmtTime(session.start_time) },
+      session: { id: session.id, unit: session.unit_name, active: !!session.is_active, startedAt: fmtEATTime(session.start_time) },
       total: (await classStudents(cc)).length,
       logs: rows.map((r) => ({ id: r.id, name: r.name, adm: r.adm_no, time: fmtTime(r.timestamp), status: r.is_late ? 'Late' : 'Present', offline: !!r.is_offline_synced, method: r.record_method || 'qr', recordedBy: r.recorded_by || null })),
     });
@@ -882,7 +882,7 @@ export const teacher = {
       const present = (await one('SELECT COUNT(*) AS n FROM attendance_logs WHERE session_id = ?', [s.id])).n;
       const total = (await classStudents(s.class_code)).length;
       const repRow = await one('SELECT u.name FROM classes c JOIN users u ON u.id = c.rep_id WHERE c.class_code = ?', [s.class_code]) || await one("SELECT name FROM users WHERE role = 'student_rep' AND class_code = ? AND status = 'active'", [s.class_code]);
-      out.push({ id: s.id, unit: s.unit_name, classCode: s.class_code, rep: repRow?.name || '—', date: fmtDate(s.start_time), time: fmtTime(s.start_time), stopTime: s.ended_at ? fmtTime(s.ended_at) : null, present, total, signed: !!s.signed_at, active: !!s.is_active });
+      out.push({ id: s.id, unit: s.unit_name, classCode: s.class_code, rep: repRow?.name || '—', date: fmtEATDate(s.start_time), time: fmtEATTime(s.start_time), stopTime: s.ended_at ? fmtEATTime(s.ended_at) : null, present, total, signed: !!s.signed_at, active: !!s.is_active });
     }
     res.json(out);
   }),
@@ -897,8 +897,8 @@ export const teacher = {
     res.json({
       session: {
         id: session.id, unit: session.unit_name, classCode: session.class_code,
-        date: fmtDate(session.start_time), time: fmtTime(session.start_time),
-        stopTime: session.ended_at ? fmtTime(session.ended_at) : null, active: !!session.is_active,
+        date: fmtEATDate(session.start_time), time: fmtEATTime(session.start_time),
+        stopTime: session.ended_at ? fmtEATTime(session.ended_at) : null, active: !!session.is_active,
       },
       total: roster.length,
       present: roster.length - absent.length,
@@ -927,7 +927,7 @@ export const teacher = {
     res.json({
       session: {
         id: session.id, unit: session.unit_name, classCode: session.class_code,
-        date: fmtDate(session.start_time), time: fmtTime(session.start_time), active: !!session.is_active,
+        date: fmtEATDate(session.start_time), time: fmtEATTime(session.start_time), active: !!session.is_active,
       },
       total: roster.length,
       present: present.length,
@@ -938,7 +938,8 @@ export const teacher = {
     const s = (await lecturerSessions(req)).find((x) => String(x.id) === String(req.params.id));
     if (!s) return bad(res, 'Session not found (or it is not one of your lessons).', 404);
     if (s.signed_at) return bad(res, 'This session is already signed.', 409);
-    await exec('UPDATE sessions SET signed_by = ?, signed_at = ?, is_active = 0, ended_at = COALESCE(ended_at, ?) WHERE id = ?', [req.user.id, sqlDate(), sqlDate(), s.id]);
+    const signedAt = sqlUtcDate();
+    await exec('UPDATE sessions SET signed_by = ?, signed_at = ?, is_active = 0, ended_at = COALESCE(ended_at, ?) WHERE id = ?', [req.user.id, signedAt, signedAt, s.id]);
     res.json({ message: 'Attendance signed off.' });
   }),
   absenteeism: wrap(async (req, res) => res.json(await absenteeismFor(await lecturerSessions(req)))),
@@ -1517,18 +1518,23 @@ export const admin = {
 // =========================================================================================
 const DAY3 = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const MON3 = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-const dayLabel = (d) => `${DAY3[d.getDay()]} ${String(d.getDate()).padStart(2, '0')} ${MON3[d.getMonth()]}`;
-const isoDay = (d) => sqlDate(d).slice(0, 10);
+const dayLabel = (d) => `${DAY3[d.getUTCDay()]} ${String(d.getUTCDate()).padStart(2, '0')} ${MON3[d.getUTCMonth()]}`;
+const isoDay = (d) => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+const eatCalendarDate = (value) => {
+  const { year, month, day } = eatDateParts(value);
+  return new Date(Date.UTC(year, month - 1, day));
+};
+const eatMidnightUtc = (date) => new Date(date.getTime() - 3 * 60 * 60 * 1000);
 
 // Monday 00:00 of the week containing `week` (YYYY-MM-DD, default today) .. the following Monday
 function weekBounds(week) {
   if (week && !/^\d{4}-\d{2}-\d{2}$/.test(week)) return null;
-  const base = week ? new Date(`${week}T00:00:00`) : new Date();
+  const base = week ? new Date(`${week}T00:00:00Z`) : eatCalendarDate(new Date());
   if (Number.isNaN(base.getTime())) return null;
-  base.setHours(0, 0, 0, 0);
-  const mon = new Date(base); mon.setDate(base.getDate() - ((base.getDay() + 6) % 7));
-  const next = new Date(mon); next.setDate(mon.getDate() + 7);
-  const sun = new Date(mon); sun.setDate(mon.getDate() + 6);
+  base.setUTCHours(0, 0, 0, 0);
+  const mon = new Date(base); mon.setUTCDate(base.getUTCDate() - ((base.getUTCDay() + 6) % 7));
+  const next = new Date(mon); next.setUTCDate(mon.getUTCDate() + 7);
+  const sun = new Date(mon); sun.setUTCDate(mon.getUTCDate() + 6);
   return { mon, next, sun };
 }
 
@@ -1541,10 +1547,10 @@ const SLOTS = [
 ];
 // A lesson belongs to the slot whose start is the latest one at most 30 minutes after the lesson began
 // (reps start the QR a little early or late). Before 7:30 it counts as the first slot, after 3:05 pm the last.
-const slotIndex = (d) => { const t = d.getHours() * 60 + d.getMinutes(); let k = 0; SLOTS.forEach((s, i) => { if (t >= s.start - 30) k = i; }); return k; };
-const hhmm = (v) => { const d = asDate(v); return Number.isNaN(d.getTime()) ? null : `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; }; // null (printed blank) for a missing/garbled time
-const hhmmSeconds = (v) => { const d = asDate(v); return Number.isNaN(d.getTime()) ? null : `${hhmm(v)}:${String(d.getSeconds()).padStart(2, '0')}`; };
-const shortDate = (d) => `${d.getDate()} ${MON3[d.getMonth()]}`;
+const slotIndex = (d) => { const { hour, minute } = eatDateParts(d); const t = hour * 60 + minute; let k = 0; SLOTS.forEach((s, i) => { if (t >= s.start - 30) k = i; }); return k; };
+const hhmm = (v) => { const { hour, minute } = eatDateParts(v); return Number.isNaN(hour) || Number.isNaN(minute) ? null : `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`; };
+const hhmmSeconds = (v) => { const { second } = eatDateParts(v); const time = hhmm(v); return time && !Number.isNaN(second) ? `${time}:${String(second).padStart(2, '0')}` : null; };
+const shortDate = (d) => `${d.getUTCDate()} ${MON3[d.getUTCMonth()]}`;
 const FORM_NO = 'MTTI/REG/CUR/01';
 const DAY_NAMES = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY'];
 const LOGO_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../assets/mtti-logo.png');
@@ -1563,7 +1569,7 @@ async function buildWeeklySheet(cc, week) {
   const cls = await one(`SELECT c.course, c.module, c.department, teacher.name AS class_teacher
     FROM classes c LEFT JOIN users teacher ON teacher.id = c.class_teacher_id AND teacher.role = 'teacher'
     WHERE c.class_code = ?`, [cc]);
-  const sessions = await q('SELECT * FROM sessions WHERE class_code = ? AND start_time >= ? AND start_time < ? ORDER BY start_time, id', [cc, sqlDate(b.mon), sqlDate(b.next)]);
+  const sessions = await q('SELECT * FROM sessions WHERE class_code = ? AND start_time >= ? AND start_time < ? ORDER BY start_time, id', [cc, sqlUtcDate(eatMidnightUtc(b.mon)), sqlUtcDate(eatMidnightUtc(b.next))]);
   const roster = await classStudents(cc);
   const marks = new Map(); // `${session}|${adm}` -> 'P' | 'L'
   if (sessions.length) {
@@ -1593,7 +1599,7 @@ async function buildWeeklySheet(cc, week) {
   const subjectsBySlot = new Map();
   const classCells = new Map();
   for (const s of sessions) {
-    const st = asDate(s.start_time), day = (st.getDay() + 6) % 7;
+    const st = asUtcDate(s.start_time), day = (eatCalendarDate(st).getUTCDay() + 6) % 7;
     if (day > 4) continue;
     const key = day * 4 + slotIndex(st);
     const subjectsAtSlot = subjectsBySlot.get(key) || new Set();
@@ -1611,7 +1617,7 @@ async function buildWeeklySheet(cc, week) {
   const subjects = [...groups.values()].map((g) => {
     const cells = new Map();
     for (const s of g.list) {
-      const st = asDate(s.start_time), day = (st.getDay() + 6) % 7;
+      const st = asUtcDate(s.start_time), day = (eatCalendarDate(st).getUTCDay() + 6) % 7;
       if (day > 4) { weekendSkipped++; continue; } // the register has Monday-Friday columns only
       const slot = slotIndex(st), key = day * 4 + slot;
       const c = cells.get(key) || { day, slot, ids: [], timeIn: null, timeOut: null, signed: true, allEnded: true };
@@ -1644,15 +1650,15 @@ async function buildWeeklySheet(cc, week) {
     })),
   };
 
-  const friday = new Date(b.mon); friday.setDate(b.mon.getDate() + 4);
+  const friday = new Date(b.mon); friday.setUTCDate(b.mon.getUTCDate() + 4);
   return {
     classCode: cc, course: cls ? `${cls.course} · ${cls.module}` : '', department: cls?.department || '',
     classTeacher: cls?.class_teacher || '',
     subjectsBySlot: [...subjectsBySlot.entries()].map(([slot, units]) => ({ slot, units: [...units].sort((a, b) => a.localeCompare(b)).join(' / ') })),
     classRegister,
-    weekStart: isoDay(b.mon), weekEnd: isoDay(b.sun), weekLabel: `${dayLabel(b.mon)} - ${dayLabel(b.sun)} ${b.sun.getFullYear()}`,
-    weekNumber, dateFrom: shortDate(b.mon), dateTo: shortDate(friday), year: b.mon.getFullYear(), weekendSkipped,
-    sessions: sessions.map((s, i) => ({ n: i + 1, id: s.id, label: `${dayLabel(asDate(s.start_time))} ${fmtTime(s.start_time)}`, stopTime: s.ended_at ? fmtTime(s.ended_at) : null, unit: s.unit_name, lecturer: s.lecturer_name, signed: !!s.signed_at })),
+    weekStart: isoDay(b.mon), weekEnd: isoDay(b.sun), weekLabel: `${dayLabel(b.mon)} - ${dayLabel(b.sun)} ${b.sun.getUTCFullYear()}`, timeZone: 'EAT',
+    weekNumber, dateFrom: shortDate(b.mon), dateTo: shortDate(friday), year: b.mon.getUTCFullYear(), weekendSkipped,
+    sessions: sessions.map((s, i) => ({ n: i + 1, id: s.id, label: `${dayLabel(eatCalendarDate(s.start_time))} ${fmtEATTime(s.start_time)}`, stopTime: s.ended_at ? fmtEATTime(s.ended_at) : null, unit: s.unit_name, lecturer: s.lecturer_name, signed: !!s.signed_at })),
     students, subjects,
     totals: { students: students.length, sessions: sessions.length, presentStudents: students.filter((s) => s.present > 0).length, perfect: sessions.length ? students.filter((s) => s.absent === 0).length : 0 },
   };
@@ -1713,8 +1719,8 @@ function sendRegisterPdf(res, sh, filename) {
     const y0 = tableTop, yIn = y0 + hDay + hTime, yOut = yIn + hIn, ySubject = yOut + hOut, yLab = ySubject + hSubject, yBody = y0 + headH;
     box(L, y0, wSN, headH); label('S/N\nO', L, y0, wSN, headH, { size: 7, bold: true });
     box(xADM, y0, wADM + wNAME, hDay + hTime); label('DETAILS', xADM, y0, wADM + wNAME, hDay + hTime, { size: 9, bold: true });
-    box(xADM, yIn, wADM + wNAME, hIn); label('TIME IN', xADM, yIn, wADM + wNAME, hIn, { size: 8, bold: true });
-    box(xADM, yOut, wADM + wNAME, hOut); label('TIME OUT', xADM, yOut, wADM + wNAME, hOut, { size: 8, bold: true });
+    box(xADM, yIn, wADM + wNAME, hIn); label('TIME IN (EAT)', xADM, yIn, wADM + wNAME, hIn, { size: 8, bold: true });
+    box(xADM, yOut, wADM + wNAME, hOut); label('TIME OUT (EAT)', xADM, yOut, wADM + wNAME, hOut, { size: 8, bold: true });
     box(xADM, ySubject, wADM + wNAME, hSubject); label('SUBJECT', xADM, ySubject, wADM + wNAME, hSubject, { size: 8, bold: true });
     box(xADM, yLab, wADM, hLab); label('ADM NO', xADM, yLab, wADM, hLab, { size: 7.5, bold: true });
     box(xNAME, yLab, wNAME, hLab); label('NAME', xNAME, yLab, wNAME, hLab, { size: 9, bold: true });

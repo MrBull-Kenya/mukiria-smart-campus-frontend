@@ -201,6 +201,18 @@ const sid = sess.data.id;
 const liveStudentTimetable = await api('GET', '/student/timetable', { token: s1 });
 const liveRepTimetable = await api('GET', '/classrep/timetable', { token: repT });
 ok('trainee and rep timetable APIs include their live session', liveStudentTimetable.data?.liveSession?.id === sid && liveRepTimetable.data?.liveSession?.id === sid);
+const startedSessionRow = (await pool.query('SELECT start_time FROM sessions WHERE id = ?', [sid]))[0][0];
+const startedSessionInstant = startedSessionRow.start_time instanceof Date
+  ? startedSessionRow.start_time
+  : new Date(`${String(startedSessionRow.start_time).replace(' ', 'T')}Z`);
+const expectedStartedEAT = new Intl.DateTimeFormat('en-US', {
+  timeZone: 'Africa/Nairobi', hour: '2-digit', minute: '2-digit', hour12: true,
+}).format(startedSessionInstant);
+ok('session start is stored as UTC and displayed as the actual EAT start time',
+  Math.abs(Date.now() - startedSessionInstant.getTime()) < 5000 &&
+  liveStudentTimetable.data?.liveSession?.startedAt === expectedStartedEAT &&
+  liveRepTimetable.data?.liveSession?.startedAt === expectedStartedEAT,
+  `stored=${startedSessionRow.start_time} expected=${expectedStartedEAT} student=${liveStudentTimetable.data?.liveSession?.startedAt}`);
 ok('class rep cannot appoint an Acting Rep while a session is already active', (await api('POST', '/classrep/acting-rep', { token: repT, body: { user_id: (await pool.query("SELECT id FROM users WHERE email = '1003@mtti.ac.ke'"))[0][0]?.id } })).status === 409);
 await pool.query("INSERT INTO users (email, password, name, role, class_code) VALUES ('otherteacher@mtti.ac.ke', ?, 'Ms Other Teacher', 'teacher', NULL)", [pw]);
 const otherTL = await login('otherteacher@mtti.ac.ke', 'Passw0rd!', 'other-teacher'); const otherTeach = otherTL.data.token;
@@ -774,7 +786,7 @@ await snap();
 
 
 // ---------- 12. weekly attendance sheet (Friday printout) ----------
-const stamp = (d) => { const p = (n) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; };
+const stamp = (d) => d.toISOString().slice(0, 19).replace('T', ' ');
 const sess2 = await api('POST', '/classrep/sessions', { token: repT, body: { unit_name: 'Databases', lecturer_name: 'Mr Teacher', venue: 'Lab 2', late_threshold_mins: 1 } });
 await pool.query('UPDATE sessions SET start_time = ? WHERE id = ?', [stamp(new Date(Date.now() - 5 * 60000)), sess2.data.id]); // began 5 min ago, "late" after 1 min
 const qr2 = (await api('POST', '/qr/generate', { token: repT, body: { session_id: sess2.data.id, gps_lat: -1.123, gps_lng: 37.123 } })).data.token;
@@ -792,6 +804,21 @@ ok('Brian: present at Networking, absent at Databases', rowOf('Brian').marks[col
 ok('Carol (never checked in) is absent for both', rowOf('Carol').absent === 2 && rowOf('Carol').present === 0 && rowOf('Carol').pct === 0);
 ok('totals: 2 of 5 students were present this week', wk.data.totals.students === 5 && wk.data.totals.sessions === 2 && wk.data.totals.presentStudents === 2 && wk.data.totals.perfect === 1, JSON.stringify(wk.data.totals));
 ok('sheet shows which lessons the lecturer has signed', wk.data.sessions[colOf('Networking')].signed === true && wk.data.sessions[colOf('Databases')].signed === false);
+const databaseSessionRow = (await pool.query('SELECT start_time, ended_at FROM sessions WHERE id = ?', [sess2.data.id]))[0][0];
+const databaseSessionStart = databaseSessionRow.start_time instanceof Date
+  ? databaseSessionRow.start_time
+  : new Date(`${String(databaseSessionRow.start_time).replace(' ', 'T')}Z`);
+const databaseSessionEnd = databaseSessionRow.ended_at instanceof Date
+  ? databaseSessionRow.ended_at
+  : new Date(`${String(databaseSessionRow.ended_at).replace(' ', 'T')}Z`);
+const eatClock = (date) => new Intl.DateTimeFormat('en-US', {
+  timeZone: 'Africa/Nairobi', hour: '2-digit', minute: '2-digit', hour12: true,
+}).format(date);
+const databaseWeeklySession = wk.data.sessions.find((session) => session.unit === 'Databases');
+ok('weekly sheet records session time-in and time-out in EAT',
+  databaseWeeklySession?.label.endsWith(eatClock(databaseSessionStart)) &&
+  databaseWeeklySession?.stopTime === eatClock(databaseSessionEnd),
+  JSON.stringify(databaseWeeklySession));
 ok('students are sorted by name', wk.data.students.map((s) => s.name).join() === [...wk.data.students.map((s) => s.name)].sort().join());
 await snap();
 

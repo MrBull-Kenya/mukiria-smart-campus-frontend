@@ -2,7 +2,7 @@ import { calculateDistance, QR_SCAN_RADIUS_METERS, verifyGeofence } from '../con
 import pool from '../config/db.js';
 import { verifyToken as verifyQr } from '../utils/qrGenerator.js';
 import { DeviceLockModel } from '../models/DeviceLock.js';
-import { one, q, exec, sqlDate, asDate, pct1 } from '../utils/dbHelpers.js';
+import { one, q, exec, sqlDate, asUtcDate, pct1 } from '../utils/dbHelpers.js';
 import { passkeyController } from './passkeyController.js';
 import { activeActingRepById } from '../utils/actingRep.js';
 
@@ -130,7 +130,7 @@ export const attendanceController = {
 
       // 7. Late threshold (FEAT 4).
       let when = new Date();
-      const minsIn = (when - asDate(session.start_time)) / 60000;
+      const minsIn = (when - asUtcDate(session.start_time)) / 60000;
       const is_late = minsIn > (session.late_threshold_mins || 15);
       const points_earned = is_late ? POINTS_LATE : POINTS_ON_TIME;
 

@@ -74,7 +74,7 @@ Laid out like the paper register: logo and institute name, WEEK / DATE FROM-TO /
 - A lesson goes in the slot whose start is the latest one at most 30 minutes after the lesson began (before 7:30 am counts as slot 1, after 3:05 pm as slot 4). Two lessons of the same subject in one slot merge into one cell.
 - A **late** arrival still gets a tick (the paper register has no "late"). Names are printed in capitals.
 - **WEEK** = weeks since the **term start date** (Admin > Settings); blank if it isn't set. **DEPARTMENT** is set per class (Admin > Classes); blank if not set. The page warns when either is missing.
-- **TIME IN** = when the rep started the lesson; **TIME OUT** = when the rep pressed End session or the teacher signed (blank if neither happened). A "signed" note appears under TEACHER'S SIGN for lessons signed in the app; the teacher can still sign by hand.
+- **TIME IN** = when the rep started the lesson; **TIME OUT** = when the rep pressed End session or the teacher signed (blank if neither happened). Session timestamps are stored as UTC instants and displayed/grouped in East Africa Time (EAT), independent of the server's local time zone. A "signed" note appears under TEACHER'S SIGN for lessons signed in the app; the teacher can still sign by hand.
 - Saturday/Sunday lessons have no column; they are counted in a footer note and appear in the CSV export.
 
 ## 3. What the wiring/fix passes changed
@@ -95,7 +95,7 @@ Laid out like the paper register: logo and institute name, WEEK / DATE FROM-TO /
 | 80 frontend source files compile and bundle; every link has a route; every one of the 83 frontend API calls has a backend route; no dead files | clean |
 
 ## 5. NOT verified: please test these yourself
-- **Real MySQL.** Tests used SQLite. SQL is in the common subset, but run the flow once on MySQL. Keep Node and MySQL on the same time zone (the "today" boundaries depend on it).
+- **Real MySQL.** Tests used SQLite. SQL is in the common subset, but run the flow once on MySQL. Session times use UTC storage and EAT display, independent of the Node/MySQL server time zones.
 - **A real browser:** camera, GPS, QR decoding, IndexedDB offline queue, service worker, `vite build`, and the Tailwind styling. The tool environment had no browser and the zip's `vite`/`tailwindcss`/`axios` were broken.
 - Real `socket.io-client` and `axios` (tested at the wire level instead); React 18 (tests ran on 19); sending email.
 

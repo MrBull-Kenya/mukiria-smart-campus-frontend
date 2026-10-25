@@ -3,7 +3,7 @@ import { startRegistration } from '@simplewebauthn/browser';
 import { useNavigate } from 'react-router-dom';
 import api, { getErrorMessage } from '../services/api';
 import { useAuth } from '../context/AuthContext';
-import { roleLabel } from '../config/campus';
+import { getProfilePhotoUrl, roleLabel } from '../config/campus';
 import { Page, Card, Input, Btn, Notice, PasswordInput, Spinner, Badge } from '../components/ui';
 
 export default function Profile() {
@@ -25,7 +25,28 @@ export default function Profile() {
   const [passkeyNotice, setPasskeyNotice] = useState(null);
   const [photoBusy, setPhotoBusy] = useState(false);
   const [photoNotice, setPhotoNotice] = useState(null);
+  const [photoDraft, setPhotoDraft] = useState(null);
+  const [cropZoom, setCropZoom] = useState(1);
+  const [cropOffset, setCropOffset] = useState({ x: 0, y: 0 });
+  const [cropSize, setCropSize] = useState(288);
+  const [cropImageSize, setCropImageSize] = useState(null);
+  const [cropError, setCropError] = useState('');
   const photoInputRef = useRef(null);
+  const cropViewportRef = useRef(null);
+  const dragRef = useRef(null);
+
+  useEffect(() => () => {
+    if (photoDraft?.url) URL.revokeObjectURL(photoDraft.url);
+  }, [photoDraft]);
+
+  useEffect(() => {
+    if (!photoDraft) return undefined;
+    const closeOnEscape = (event) => {
+      if (event.key === 'Escape' && !photoBusy) setPhotoDraft(null);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [photoDraft, photoBusy]);
 
   useEffect(() => {
     let active = true;
@@ -72,22 +93,98 @@ export default function Profile() {
     } finally { setSaving(false); }
   };
 
-  const uploadPhoto = async (event) => {
+  const selectPhoto = (event) => {
     const file = event.target.files?.[0];
     if (!file) return;
+    setPhotoNotice(null);
+    setCropError('');
+    if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(file.type)) {
+      setPhotoNotice({ kind: 'error', text: 'Choose a JPEG, PNG, WebP, or GIF image.' });
+    } else if (file.size > 2 * 1024 * 1024) {
+      setPhotoNotice({ kind: 'error', text: 'Choose an image that is 2 MB or smaller.' });
+    } else {
+      setPhotoDraft({ file, url: URL.createObjectURL(file) });
+      setCropZoom(1);
+      setCropImageSize(null);
+    }
+    if (photoInputRef.current) photoInputRef.current.value = '';
+  };
+
+  const setCropImage = (image) => {
+    const size = cropViewportRef.current?.clientWidth || 288;
+    const scale = Math.max(size / image.naturalWidth, size / image.naturalHeight);
+    const baseWidth = image.naturalWidth * scale;
+    const baseHeight = image.naturalHeight * scale;
+    const width = baseWidth * cropZoom;
+    const height = baseHeight * cropZoom;
+    setCropSize(size);
+    setCropImageSize({ baseWidth, baseHeight, width, height, scale: scale * cropZoom });
+    setCropOffset({ x: (size - width) / 2, y: (size - height) / 2 });
+  };
+
+  const updateCropZoom = (value) => {
+    const zoom = Number(value);
+    setCropZoom(zoom);
+    if (!cropImageSize) return;
+    const width = cropImageSize.baseWidth * zoom;
+    const height = cropImageSize.baseHeight * zoom;
+    const baseScale = cropImageSize.scale / (cropZoom || 1);
+    setCropImageSize({ ...cropImageSize, width, height, scale: baseScale * zoom });
+    setCropOffset({ x: (cropSize - width) / 2, y: (cropSize - height) / 2 });
+  };
+
+  const startCropDrag = (event) => {
+    if (!cropImageSize) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      offset: cropOffset,
+    };
+  };
+
+  const moveCrop = (event) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId || !cropImageSize) return;
+    setCropOffset({
+      x: Math.min(0, Math.max(cropSize - cropImageSize.width, drag.offset.x + event.clientX - drag.startX)),
+      y: Math.min(0, Math.max(cropSize - cropImageSize.height, drag.offset.y + event.clientY - drag.startY)),
+    });
+  };
+
+  const saveCroppedPhoto = async () => {
+    if (!photoDraft || !cropImageSize) return;
     setPhotoBusy(true);
     setPhotoNotice(null);
+    setCropError('');
     try {
+      const image = new Image();
+      image.src = photoDraft.url;
+      await image.decode();
+      const canvas = document.createElement('canvas');
+      canvas.width = 512;
+      canvas.height = 512;
+      const context = canvas.getContext('2d');
+      if (!context) throw new Error('Image editing is not available in this browser.');
+      const sourceX = Math.max(0, -cropOffset.x / cropImageSize.scale);
+      const sourceY = Math.max(0, -cropOffset.y / cropImageSize.scale);
+      const sourceSize = cropSize / cropImageSize.scale;
+      context.drawImage(image, sourceX, sourceY, sourceSize, sourceSize, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.9));
+      if (!blob) throw new Error('Could not prepare the cropped image. Please try another photo.');
+
       const formData = new FormData();
-      formData.append('photo', file);
+      formData.append('photo', blob, 'profile-photo.jpg');
       const { data } = await api.post('/profile/photo', formData);
       setProfile((current) => ({ ...current, profile_photo_url: data.user.profile_photo_url }));
+      updateUser({ profile_photo_url: data.user.profile_photo_url });
       setPhotoNotice({ kind: 'ok', text: data.message });
+      setPhotoDraft(null);
     } catch (err) {
-      setPhotoNotice({ kind: 'error', text: getErrorMessage(err, 'Could not update your profile photo.') });
+      setCropError(err?.message || getErrorMessage(err, 'Could not update your profile photo.'));
     } finally {
       setPhotoBusy(false);
-      if (photoInputRef.current) photoInputRef.current.value = '';
     }
   };
 
@@ -177,7 +274,7 @@ export default function Profile() {
           <Card className="flex flex-wrap items-center gap-4 border-blue-100 bg-gradient-to-r from-blue-50/80 to-white p-5">
             <div className="relative">
               {profile.profile_photo_url ? (
-                <img src={profile.profile_photo_url} alt="Profile" className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl object-cover shadow-sm shadow-blue-900/20" />
+                <img src={getProfilePhotoUrl(profile.profile_photo_url)} alt="Profile" className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl object-cover shadow-sm shadow-blue-900/20" />
               ) : (
                 <div aria-hidden="true" className="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-blue-600 text-lg font-black text-white shadow-sm shadow-blue-900/20">
                   {initials}
@@ -189,11 +286,14 @@ export default function Profile() {
                     type="button"
                     onClick={() => photoInputRef.current?.click()}
                     disabled={photoBusy}
-                    className="absolute -bottom-1 -right-1 rounded-full border border-white bg-slate-900 px-2 py-1 text-[10px] font-bold text-white shadow-sm disabled:cursor-not-allowed disabled:opacity-60"
+                    className="absolute -bottom-1 -right-1 flex h-8 items-center gap-1 rounded-full border-2 border-white bg-blue-700 px-2.5 text-[10px] font-bold text-white shadow-md transition hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    {photoBusy ? '…' : 'Edit'}
+                    <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" className="h-3.5 w-3.5" stroke="currentColor" strokeWidth="1.8">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="m13.8 3.2 3 3M3 17l3.8-.8L16.5 6.5a2.1 2.1 0 0 0-3-3L3.8 13.2 3 17Z" />
+                    </svg>
+                    Edit
                   </button>
-                  <input ref={photoInputRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" className="hidden" onChange={uploadPhoto} />
+                  <input ref={photoInputRef} type="file" accept="image/jpeg,image/png,image/webp,image/gif" className="hidden" onChange={selectPhoto} />
                 </>
               )}
             </div>
@@ -212,6 +312,62 @@ export default function Profile() {
             )}
           </Card>
           {photoNotice && <Notice kind={photoNotice.kind}>{photoNotice.text}</Notice>}
+
+          {photoDraft && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/65 p-4 backdrop-blur-sm" onMouseDown={(event) => {
+              if (event.target === event.currentTarget && !photoBusy) setPhotoDraft(null);
+            }}>
+              <section role="dialog" aria-modal="true" aria-labelledby="photo-crop-title" className="my-auto w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
+                <div className="mb-5 flex items-start justify-between gap-4">
+                  <div>
+                    <h2 id="photo-crop-title" className="text-lg font-extrabold tracking-tight text-slate-900">Preview and crop photo</h2>
+                    <p className="mt-1 text-xs leading-5 text-slate-500">Drag to position your photo, then adjust the zoom. The square preview is how it will appear on your profile.</p>
+                  </div>
+                  <button type="button" onClick={() => setPhotoDraft(null)} disabled={photoBusy} aria-label="Close photo editor" className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 disabled:opacity-50">
+                    <svg aria-hidden="true" viewBox="0 0 20 20" fill="none" className="h-5 w-5" stroke="currentColor" strokeWidth="1.8"><path strokeLinecap="round" d="m5 5 10 10M15 5 5 15" /></svg>
+                  </button>
+                </div>
+                <div className="flex justify-center">
+                  <div
+                    ref={cropViewportRef}
+                    onPointerDown={startCropDrag}
+                    onPointerMove={moveCrop}
+                    onPointerUp={() => { dragRef.current = null; }}
+                    onPointerCancel={() => { dragRef.current = null; }}
+                    className="relative size-72 max-h-[calc(100vw-2rem)] max-w-[calc(100vw-2rem)] touch-none cursor-grab overflow-hidden rounded-2xl bg-slate-100 ring-4 ring-blue-50 active:cursor-grabbing"
+                    aria-label="Drag the image to adjust the crop"
+                  >
+                    <img
+                      src={photoDraft.url}
+                      alt="Photo crop preview"
+                      onLoad={(event) => setCropImage(event.currentTarget)}
+                      draggable="false"
+                      className="pointer-events-none absolute max-w-none select-none"
+                      style={cropImageSize ? {
+                        width: cropImageSize.width,
+                        height: cropImageSize.height,
+                        left: cropOffset.x,
+                        top: cropOffset.y,
+                      } : { visibility: 'hidden' }}
+                    />
+                    {!cropImageSize && <span className="absolute inset-0 flex items-center justify-center text-sm font-semibold text-slate-500">Preparing preview…</span>}
+                    <div aria-hidden="true" className="pointer-events-none absolute inset-0 rounded-2xl ring-1 ring-inset ring-white/70" />
+                  </div>
+                </div>
+                <label className="mt-5 block">
+                  <span className="mb-2 flex items-center justify-between text-xs font-bold text-slate-700"><span>Zoom</span><span>{Math.round(cropZoom * 100)}%</span></span>
+                  <input type="range" min="1" max="3" step="0.01" value={cropZoom} onChange={(event) => updateCropZoom(event.target.value)} disabled={!cropImageSize || photoBusy} className="h-2 w-full cursor-pointer accent-blue-700" />
+                </label>
+                {cropError && <div role="alert" className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2.5 text-xs font-medium leading-5 text-rose-800">{cropError}</div>}
+                <div className="mt-5 flex flex-col-reverse gap-2 border-t border-slate-100 pt-4 sm:flex-row sm:justify-end">
+                  <button type="button" onClick={() => setPhotoDraft(null)} disabled={photoBusy} className="min-h-10 rounded-xl border border-slate-200 px-4 text-sm font-bold text-slate-700 transition hover:bg-slate-50 disabled:opacity-50">Cancel</button>
+                  <button type="button" onClick={saveCroppedPhoto} disabled={photoBusy || !cropImageSize} className="min-h-10 rounded-xl bg-blue-700 px-4 text-sm font-bold text-white shadow-sm transition hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60">
+                    {photoBusy ? 'Saving photo…' : 'Save profile photo'}
+                  </button>
+                </div>
+              </section>
+            </div>
+          )}
 
           <div className="grid items-start gap-4 lg:grid-cols-2">
             <Card className="p-5">

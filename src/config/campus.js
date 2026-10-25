@@ -13,6 +13,13 @@ export const API_BASE_URL = normalizedApiUrl
   ? (/\/api$/i.test(normalizedApiUrl) ? normalizedApiUrl : `${normalizedApiUrl}/api`)
   : '/api';
 
+export const getProfilePhotoUrl = (photoUrl) => {
+  if (!photoUrl) return '';
+  if (/^https?:\/\//i.test(photoUrl)) return photoUrl;
+  const serverBase = API_BASE_URL.replace(/\/api\/?$/i, '');
+  return `${serverBase}${photoUrl.startsWith('/') ? photoUrl : `/${photoUrl}`}`;
+};
+
 export const SOCKET_URL = (() => {
   if (import.meta.env.VITE_SOCKET_URL) return import.meta.env.VITE_SOCKET_URL;
   if (/^https?:/i.test(API_BASE_URL)) return API_BASE_URL.replace(/\/api\/?$/, '');

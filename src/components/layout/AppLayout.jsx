@@ -5,7 +5,8 @@ import { useOfflineSync } from '../../hooks/useOfflineSync';
 import InstallButton from '../InstallButton';
 import NotificationBell from '../NotificationBell';
 import { NAV_BY_ROLE } from '../../config/navigation';
-import { roleLabel } from '../../config/campus';
+import { getProfilePhotoUrl, roleLabel } from '../../config/campus';
+import api from '../../services/api';
 import { Icon } from '../ui';
 
 function OfflineStatusBar() {
@@ -38,7 +39,7 @@ function initialTheme() {
 }
 
 export default function AppLayout() {
-  const { user, logout } = useAuth();
+  const { user, logout, updateUser } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -54,6 +55,19 @@ export default function AppLayout() {
     document.documentElement.style.colorScheme = theme;
     try { window.localStorage.setItem('mtti-theme', theme); } catch { /* Theme still works for this page view. */ }
   }, [theme]);
+
+  useEffect(() => {
+    if (!['student', 'student_rep'].includes(user.role) || user.profile_photo_url) return undefined;
+    let active = true;
+    api.get('/profile')
+      .then(({ data }) => {
+        if (active && data.user.profile_photo_url) updateUser({ profile_photo_url: data.user.profile_photo_url });
+      })
+      .catch((err) => {
+        if (active) console.error('Could not load the profile photo for the app header:', err);
+      });
+    return () => { active = false; };
+  }, [user.id, user.role, user.profile_photo_url, updateUser]);
 
   const handleLogout = () => {
     logout();
@@ -85,8 +99,10 @@ export default function AppLayout() {
                 ? <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5"><circle cx="12" cy="12" r="4" /><path strokeLinecap="round" d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42" /></svg>
                 : <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-5 w-5"><path strokeLinecap="round" strokeLinejoin="round" d="M20.5 15.5A8.5 8.5 0 0 1 8.5 3.5 8.5 8.5 0 1 0 20.5 15.5z" /></svg>}
             </button>
-            <NavLink to="/profile" aria-label="Open your profile" title="Profile" className="flex h-9 w-9 items-center justify-center rounded-full border border-blue-200 bg-blue-50 text-sm font-black text-blue-700 hover:bg-blue-100">
-              {user.name?.trim()?.charAt(0)?.toUpperCase() || '👤'}
+            <NavLink to="/profile" aria-label="Open your profile" title="Profile" className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full border border-blue-200 bg-blue-50 text-sm font-black text-blue-700 hover:bg-blue-100">
+              {user.profile_photo_url
+                ? <img src={getProfilePhotoUrl(user.profile_photo_url)} alt="" className="h-full w-full object-cover" />
+                : user.name?.trim()?.charAt(0)?.toUpperCase() || '👤'}
             </NavLink>
             <button onClick={handleLogout} className="flex h-9 items-center gap-1.5 rounded-lg border border-slate-200 px-2.5 text-xs font-bold text-slate-600 transition hover:border-rose-200 hover:bg-rose-50 hover:text-rose-700 sm:px-3">
               <span className="hidden sm:inline">Log out</span>
